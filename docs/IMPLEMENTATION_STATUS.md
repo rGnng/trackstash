@@ -17,7 +17,7 @@
 | M3 | Complete | Qt library browser, track table, detail panel, import wizard |
 | M4 | Complete | Single/batch tag editor, previews, verified writes, artwork, journal, undo/redo |
 | M5 | Complete | Template organization, UUID remapping, duplicate review, index/Trash deletion |
-| M6 | Complete | Backup/restore, settings, PyInstaller app bundle, ad-hoc signed DMG |
+| M6 | Complete | Backup/restore, settings, ReKey, PyInstaller app bundle, ad-hoc signed DMG |
 
 ## Verified behavior
 
@@ -25,6 +25,7 @@
   Swift final-sigma case.
 - Metadata round-trips cover FLAC, MP3, M4A, OGG, Opus, WAV, AIFF, and WavPack.
 - Imports copy by default or move on request; sources are untouched in copy mode.
+- The import dialog accepts folders or individual files and warns before very large imports.
 - Tag edits update files and DB, verify by re-reading, and support undo/redo.
 - Organization recomputes song UUIDs from the new relative paths and remaps all
   references in one transaction.
@@ -37,7 +38,7 @@
 Test status at the time of writing:
 
 ```text
-45 passed, 2 skipped (default suite)
+46 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 

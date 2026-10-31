@@ -38,6 +38,7 @@ from trackstash.core.library import (
     OrganizePlanItem,
     OrganizeResult,
     TagChange,
+    collect_audio_files,
 )
 from trackstash.core.template import DEFAULT_TEMPLATE
 
@@ -98,6 +99,7 @@ class TagEditorDialog(QDialog):
         self.setMinimumWidth(520)
 
         tags = service.db.load_tag_set(self.track_ids[0]) if self.track_ids else None
+        all_tags = [service.db.load_tag_set(track_id) for track_id in self.track_ids]
         single = len(self.track_ids) == 1
 
         layout = QVBoxLayout(self)
@@ -112,7 +114,15 @@ class TagEditorDialog(QDialog):
             line = QLineEdit(row)
             line.setPlaceholderText("Leave unchanged" if not single else "")
             if tags is not None:
-                line.setText(_values_text(getattr(tags, key)))
+                values = [
+                    _values_text(getattr(tag, key)) if tag is not None else "" for tag in all_tags
+                ]
+                if single:
+                    line.setText(values[0] if values else "")
+                elif values and len(set(values)) == 1:
+                    line.setText(values[0])
+                else:
+                    line.setPlaceholderText("Mixed values")
             row_layout.addWidget(check)
             row_layout.addWidget(line, 1)
             form.addRow(label, row)
@@ -239,18 +249,22 @@ class ImportDialog(QDialog):
         self.plan: ImportPlan | None = None
         self.import_result: ImportResult | None = None
         self.common_edits: dict[str, object] = {}
+        self._sources: list[str] = []
         self.setWindowTitle("Import into Library")
         self.resize(960, 560)
 
         layout = QVBoxLayout(self)
         source_row = QHBoxLayout()
         self.source_edit = QLineEdit(self)
-        self.source_edit.setPlaceholderText("Folder or file to import")
-        browse = QPushButton("Browse…", self)
+        self.source_edit.setPlaceholderText("Folder or files to import")
+        browse = QPushButton("Folder…", self)
         browse.clicked.connect(self._browse)
+        browse_files = QPushButton("Files…", self)
+        browse_files.clicked.connect(self._browse_files)
         source_row.addWidget(QLabel("Source", self))
         source_row.addWidget(self.source_edit, 1)
         source_row.addWidget(browse)
+        source_row.addWidget(browse_files)
         layout.addLayout(source_row)
 
         options = QHBoxLayout()
@@ -309,7 +323,20 @@ class ImportDialog(QDialog):
     def _browse(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose a folder to import")
         if folder:
+            self._sources = [folder]
             self.source_edit.setText(folder)
+
+    def _browse_files(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Choose files to import",
+            str(Path.home()),
+            "Audio (*.flac *.mp3 *.m4a *.mp4 *.ogg *.oga *.opus *.wav *.aiff "
+            "*.aif *.ape *.wv *.dsf *.dff)",
+        )
+        if files:
+            self._sources = list(files)
+            self.source_edit.setText(f"{len(files)} files selected")
 
     def _edit_overrides(self) -> None:
         dialog = BulkImportEditDialog(self)
@@ -322,14 +349,34 @@ class ImportDialog(QDialog):
     def preview(self) -> None:
         source = self.source_edit.text().strip()
         library_id = self.library_combo.currentData()
-        if not source or not library_id:
+        sources = self._sources or ([source] if source else [])
+        if not sources or not library_id:
             QMessageBox.warning(self, "Import", "Choose a source and a target library.")
             return
+        try:
+            files: list[Path] = []
+            for item in sources:
+                files.extend(collect_audio_files(item))
+        except Exception as exc:
+            QMessageBox.critical(self, "Import failed", str(exc))
+            return
+        total_bytes = sum(path.stat().st_size for path in files)
+        if len(files) > 1000 or total_bytes > 2 * 1024**3:
+            size_text = f"{total_bytes / 1024**3:.1f} GB"
+            answer = QMessageBox.question(
+                self,
+                "Large import",
+                f"This import contains {len(files)} files ({size_text}).\\n\\n"
+                "Copying the whole selection may consume significant disk space. "
+                "Continue with the preview?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         self.status.setText("Planning import…")
         QApplication.processEvents()
         try:
             plan = self.service.plan_import(
-                [source],
+                sources,
                 str(library_id),
                 mode=str(self.mode_combo.currentData()),
                 template=self.template_edit.text().strip() or DEFAULT_TEMPLATE,
@@ -342,12 +389,12 @@ class ImportDialog(QDialog):
             return
         self.plan = plan
         self.table.setRowCount(len(plan.items))
-        for row, item in enumerate(plan.items):
-            self.table.setItem(row, 0, QTableWidgetItem(str(item.source)))
-            self.table.setItem(row, 1, QTableWidgetItem(str(item.destination)))
-            self.table.setItem(row, 2, QTableWidgetItem(item.action))
-            note = item.warning
-            if item.collision:
+        for row, plan_item in enumerate(plan.items):
+            self.table.setItem(row, 0, QTableWidgetItem(str(plan_item.source)))
+            self.table.setItem(row, 1, QTableWidgetItem(str(plan_item.destination)))
+            self.table.setItem(row, 2, QTableWidgetItem(plan_item.action))
+            note = plan_item.warning
+            if plan_item.collision:
                 note = (note + " collision resolved").strip()
             self.table.setItem(row, 3, QTableWidgetItem(note))
         self.import_button.setEnabled(

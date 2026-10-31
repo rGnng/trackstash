@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Approved for M0 — 2026-10-31 |
+| **Status** | Approved — M0–M6 core implementation delivered |
 | **Date** | 2026-10-31 |
 | **Product** | TrackStash |
 | **Document language** | English (project-wide convention) |
@@ -819,4 +819,4 @@ approved explicitly; unmentioned items remain unchanged.
 | **Requirements approved** | ☑ Yes  ☐ No — changes requested |
 | **Approved by** | Project owner |
 | **Date** | 2026-10-31 |
-| **Next milestone** | M0 — repository scaffold and CI |
+| **Next milestone** | M6 — release hardening and packaging (see `docs/IMPLEMENTATION_STATUS.md`) |

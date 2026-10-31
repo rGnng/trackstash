@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QAction, QKeySequence, QPixmap
+from PySide6.QtCore import QPoint, Qt, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -134,6 +134,9 @@ class MainWindow(QMainWindow):
         self.extract_cover_action = QAction("Extract Cover…", self)
         self.extract_cover_action.triggered.connect(self.extract_cover)
 
+        self.reveal_action = QAction("Reveal in Finder", self)
+        self.reveal_action.triggered.connect(self.reveal_selected)
+
         self.settings_action = QAction("Settings…", self)
         self.settings_action.setShortcut(QKeySequence("Ctrl+,"))
         self.settings_action.triggered.connect(self.open_settings)
@@ -167,6 +170,8 @@ class MainWindow(QMainWindow):
         library_menu.addAction(self.set_cover_action)
         library_menu.addAction(self.remove_cover_action)
         library_menu.addAction(self.extract_cover_action)
+        library_menu.addSeparator()
+        library_menu.addAction(self.reveal_action)
 
         edit_menu = self.menuBar().addMenu("&Edit")
         edit_menu.addAction(self.edit_action)
@@ -304,9 +309,12 @@ class MainWindow(QMainWindow):
         remove_cover.clicked.connect(self.remove_cover)
         extract_cover = QPushButton("Extract…", detail)
         extract_cover.clicked.connect(self.extract_cover)
+        reveal = QPushButton("Reveal", detail)
+        reveal.clicked.connect(self.reveal_selected)
         artwork_buttons.addWidget(set_cover)
         artwork_buttons.addWidget(remove_cover)
         artwork_buttons.addWidget(extract_cover)
+        artwork_buttons.addWidget(reveal)
         detail_layout.addLayout(artwork_buttons)
         splitter.addWidget(detail)
 
@@ -820,6 +828,15 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Extract Cover", str(exc))
             return
         self.statusBar().showMessage(f"Cover written to {path}")
+
+    def reveal_selected(self) -> None:
+        ids = self._require_selection()
+        if ids is None:
+            return
+        track = self.db.get_track(ids[0])
+        if track is None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(track.path).parent)))
 
     def open_settings(self) -> None:
         dialog = SettingsDialog(

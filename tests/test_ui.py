@@ -92,3 +92,33 @@ def test_single_track_tag_editor(qtbot: QtBot, tmp_path: Path, audio_factory: Pa
     assert dialog._lines["title"].text() == "UI Song"
     dialog._lines["title"].setText("Edited UI Song")
     assert dialog.edits()["title"] == "Edited UI Song"
+
+
+def test_import_dialog_execute(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path, monkeypatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    incoming = tmp_path / "Execute"
+    incoming.mkdir()
+    shutil.copy2(audio_factory / "sample.mp3", incoming / "sample.mp3")
+    write_tags(
+        incoming / "sample.mp3",
+        {
+            "title": "Executed Song",
+            "artists": ["UI Artist"],
+            "album": "UI Album",
+            "album_artist": "UI Artist",
+        },
+    )
+    dialog = ImportDialog(service, [library], library.id)
+    qtbot.addWidget(dialog)
+    dialog.source_edit.setText(str(incoming))
+    dialog.preview()
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    dialog.execute()
+    assert dialog.import_result is not None
+    assert len(dialog.import_result.imported) == 1
+    assert database.track_count(library.id) == 2
