@@ -663,6 +663,112 @@ class LibraryService:
             )
         return changes
 
+    def preview_auto_number(
+        self,
+        song_ids: Sequence[str],
+        *,
+        per_disc: bool = True,
+        start: int = 1,
+    ) -> list[TagChange]:
+        """Preview sequential track numbers, grouped per album/disc."""
+        tracks = [track for song_id in song_ids if (track := self.db.get_track(song_id))]
+        groups: dict[tuple[str, int], list[Track]] = {}
+        for track in tracks:
+            key = (track.album_id, track.disc if per_disc else 0)
+            groups.setdefault(key, []).append(track)
+        changes: list[TagChange] = []
+        for group in groups.values():
+            group.sort(
+                key=lambda item: (
+                    item.track if item.track > 0 else 9999,
+                    item.title.casefold(),
+                    item.path,
+                )
+            )
+            total = len(group)
+            for offset, track in enumerate(group):
+                tags = self.db.load_tag_set(track.id)
+                if tags is None:
+                    continue
+                after = apply_tag_edits(tags, {"track": start + offset, "track_total": total})
+                before = tagset_to_dict(tags)
+                changed = [
+                    key for key, value in tagset_to_dict(after).items() if before.get(key) != value
+                ]
+                changes.append(
+                    TagChange(
+                        song_id=track.id,
+                        path=track.path,
+                        before=tags,
+                        after=after,
+                        changed_fields=changed,
+                    )
+                )
+        return changes
+
+    def auto_number_tracks(
+        self,
+        song_ids: Sequence[str],
+        *,
+        per_disc: bool = True,
+        start: int = 1,
+        progress: Progress | None = None,
+    ) -> TagUpdateResult:
+        changes = self.preview_auto_number(song_ids, per_disc=per_disc, start=start)
+        operation_id = self.db.create_operation(
+            "tags", f"Auto-number {len(changes)} tracks", undoable=True
+        )
+        updated: list[Track] = []
+        errors: list[str] = []
+        total = len(changes)
+        for index, change in enumerate(changes, start=1):
+            if progress:
+                progress("Auto-numbering", index - 1, total, change.path)
+            if not change.changed_fields:
+                continue
+            try:
+                track = self.db.get_track(change.song_id)
+                if track is None:
+                    raise ValueError("Track not found")
+                path = Path(track.path)
+                if not path.exists():
+                    raise FileNotFoundError(track.path)
+                before = tagset_to_dict(change.before)
+                edits = {
+                    "track": change.after.track,
+                    "track_total": change.after.track_total,
+                }
+                write_tags(path, edits)
+                metadata = read_metadata(path)
+                library = self.db.get_library(track.library_id or "")
+                if library is None:
+                    raise ValueError("Library not found")
+                written = self.db.upsert_tracks([metadata], library)
+                if not written:
+                    raise RuntimeError("Track was not indexed after numbering")
+                track = written[0]
+                self._cache_cover(metadata, track)
+                self.db.add_operation_item(
+                    operation_id,
+                    song_id=track.id,
+                    path=track.path,
+                    prior={"tags": before, "path": track.path, "library_id": library.id},
+                    result={"tags": tagset_to_dict(metadata.tags)},
+                )
+                updated.append(track)
+            except Exception as exc:
+                errors.append(f"{change.path}: {exc}")
+                self.db.add_operation_item(
+                    operation_id,
+                    song_id=change.song_id,
+                    path=change.path,
+                    error=str(exc),
+                )
+        self.db.finish_operation(operation_id)
+        if progress:
+            progress("Auto-numbering", total, total, "")
+        return TagUpdateResult(operation_id=operation_id, updated=updated, errors=errors)
+
     def update_tags(
         self,
         song_ids: Sequence[str],

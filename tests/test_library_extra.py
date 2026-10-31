@@ -160,3 +160,43 @@ def test_exact_duplicates_confirmed_by_full_hash(
     assert len(result.imported) == 1
     groups = service.exact_duplicates()
     assert any(len(group) == 2 for group in groups)
+
+
+def test_auto_number_per_disc_and_undo(setup: tuple, tmp_path: Path, audio_factory: Path) -> None:
+    database, service, _ = setup
+    root = tmp_path / "AutoNumber"
+    root.mkdir()
+    incoming = tmp_path / "AutoNumberIncoming"
+    incoming.mkdir()
+    for disc in (1, 2):
+        for position in (7, 8):
+            source = incoming / f"d{disc}t{position}.flac"
+            shutil.copy2(audio_factory / "sample.flac", source)
+            write_tags(
+                source,
+                {
+                    "title": f"Disc {disc} Track {position}",
+                    "artists": ["Number Artist"],
+                    "album": "Number Album",
+                    "album_artist": "Number Artist",
+                    "track": position,
+                    "disc": disc,
+                    "disc_total": 2,
+                },
+            )
+    library = database.add_library(root, name="Number")
+    service.execute_import(service.plan_import([incoming], library.id))
+    ids = [track.id for track in service.db.list_tracks(library_id=library.id)]
+    result = service.auto_number_tracks(ids, per_disc=True)
+    assert not result.errors
+    numbered = sorted(
+        (track.disc, track.track, track.track_total)
+        for track in service.db.list_tracks(library_id=library.id)
+    )
+    assert numbered == [(1, 1, 2), (1, 2, 2), (2, 1, 2), (2, 2, 2)]
+    undone = service.undo_last()
+    assert undone is not None and undone.undone == 4
+    restored = sorted(
+        (track.disc, track.track) for track in service.db.list_tracks(library_id=library.id)
+    )
+    assert restored == [(1, 7), (1, 8), (2, 7), (2, 8)]

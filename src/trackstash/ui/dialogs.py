@@ -754,3 +754,42 @@ class SettingsDialog(QDialog):
             self.cover_size.value(),
             self.quality.value(),
         )
+
+
+class AutoNumberDialog(QDialog):
+    """Choose how selected tracks are renumbered."""
+
+    def __init__(self, count: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Auto-number Tracks")
+        self.setMinimumWidth(420)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"Renumber {count} selected tracks.", self))
+        self.per_disc = QCheckBox("Number each disc separately", self)
+        self.per_disc.setChecked(True)
+        layout.addWidget(self.per_disc)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Start at", self))
+        self.start = QSpinBox(self)
+        self.start.setRange(1, 999)
+        self.start.setValue(1)
+        row.addWidget(self.start)
+        row.addStretch(1)
+        layout.addLayout(row)
+        hint = QLabel(
+            "Tracks are ordered by their current track number, then title. "
+            "A preview is shown before anything is written.",
+            self,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def values(self) -> tuple[bool, int]:
+        return self.per_disc.isChecked(), self.start.value()

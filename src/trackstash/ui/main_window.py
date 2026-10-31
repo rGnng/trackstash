@@ -40,6 +40,7 @@ from trackstash.core.db import Database, Library, Track
 from trackstash.core.library import LibraryService, content_hash
 from trackstash.core.template import DEFAULT_TEMPLATE
 from trackstash.ui.dialogs import (
+    AutoNumberDialog,
     DeleteDialog,
     DuplicateDialog,
     ImportDialog,
@@ -111,6 +112,10 @@ class MainWindow(QMainWindow):
         self.edit_action.setShortcut(QKeySequence("Ctrl+E"))
         self.edit_action.triggered.connect(self.edit_tags)
 
+        self.auto_number_action = QAction("Auto-number Tracks…", self)
+        self.auto_number_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
+        self.auto_number_action.triggered.connect(self.auto_number_tracks)
+
         self.organize_action = QAction("Organize…", self)
         self.organize_action.triggered.connect(self.organize)
 
@@ -153,6 +158,10 @@ class MainWindow(QMainWindow):
 
         self.about_action = QAction("About TrackStash", self)
         self.about_action.triggered.connect(self.show_about)
+
+        self.help_action = QAction("TrackStash Help", self)
+        self.help_action.setShortcut(QKeySequence("F1"))
+        self.help_action.triggered.connect(self.show_help)
         self.about_action.setMenuRole(QAction.MenuRole.AboutRole)
         self.settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
         self.quit_action.setMenuRole(QAction.MenuRole.QuitRole)
@@ -182,12 +191,14 @@ class MainWindow(QMainWindow):
 
         edit_menu = self.menuBar().addMenu("&Edit")
         edit_menu.addAction(self.edit_action)
+        edit_menu.addAction(self.auto_number_action)
         edit_menu.addAction(self.undo_action)
         edit_menu.addAction(self.redo_action)
         edit_menu.addSeparator()
         edit_menu.addAction(self.settings_action)
 
         help_menu = self.menuBar().addMenu("&Help")
+        help_menu.addAction(self.help_action)
         help_menu.addAction(self.about_action)
 
     def _create_toolbar(self) -> None:
@@ -199,6 +210,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.scan_quick_action)
         toolbar.addAction(self.scan_full_action)
         toolbar.addAction(self.edit_action)
+        toolbar.addAction(self.auto_number_action)
         toolbar.addAction(self.organize_action)
         toolbar.addAction(self.delete_action)
         toolbar.addAction(self.duplicates_action)
@@ -775,6 +787,30 @@ class MainWindow(QMainWindow):
             self.refresh_libraries()
             self.refresh_tracks()
 
+    def auto_number_tracks(self) -> None:
+        ids = self._require_selection()
+        if ids is None:
+            return
+        options = AutoNumberDialog(len(ids), self)
+        if options.exec() != QDialog.DialogCode.Accepted:
+            return
+        per_disc, start = options.values()
+        changes = self.service.preview_auto_number(ids, per_disc=per_disc, start=start)
+        if not changes or not any(change.changed_fields for change in changes):
+            QMessageBox.information(
+                self, "Auto-number", "The selected tracks are already numbered."
+            )
+            return
+        preview = TagPreviewDialog(changes, self)
+        if preview.exec() != QDialog.DialogCode.Accepted:
+            return
+        result = self.service.auto_number_tracks(ids, per_disc=per_disc, start=start)
+        self.refresh_libraries()
+        self.refresh_tracks()
+        if result.errors:
+            QMessageBox.warning(self, "Auto-number warnings", "\n".join(result.errors[:10]))
+        self.statusBar().showMessage(f"Renumbered {len(result.updated)} tracks")
+
     def delete_tracks(self) -> None:
         ids = self._require_selection()
         if ids is None:
@@ -939,6 +975,9 @@ class MainWindow(QMainWindow):
         self.service.cover_size = cover_size
         self.service.cover_quality = quality
         self.statusBar().showMessage("Settings saved")
+
+    def show_help(self) -> None:
+        QDesktopServices.openUrl(QUrl("https://github.com/rGnng/trackstash#readme"))
 
     def show_about(self) -> None:
         QMessageBox.about(

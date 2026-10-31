@@ -21,7 +21,8 @@ consistent without cloud dependencies.
 - **Tracks-compatible UUIDs.** Library, artist, album, and song IDs use the same
   deterministic MD5 algorithm as the Tracks macOS app and WebTracks.
 - **Tag editing.** Edit single tracks or batch selections with a preview and
-  per-track verification. Only fields changed in the editor are written.
+  per-track verification. Auto-number tracks per disc. Only fields changed in
+  the editor are written.
 - **Artwork.** View, embed, replace, remove, and extract front-cover artwork.
 - **Organization.** Rename and move files with a token template, live preview,
   collision detection, UUID remapping, journaling, and undo.
