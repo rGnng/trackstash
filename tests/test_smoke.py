@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import mutagen
 from PySide6 import __version__ as pyside_version
 from pytestqt.qtbot import QtBot
 
 from trackstash import __version__
+from trackstash.core.db import Database
 from trackstash.ui.main_window import MainWindow
 
 
@@ -20,8 +22,9 @@ def test_pyside6_is_pinned() -> None:
     assert pyside_version == "6.11.3"
 
 
-def test_main_window_starts(qtbot: QtBot) -> None:
-    window = MainWindow()
+def test_main_window_starts(qtbot: QtBot, tmp_path: Path) -> None:
+    database = Database(tmp_path / "library.sqlite")
+    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
     qtbot.addWidget(window)
     window.show()
 

@@ -1,0 +1,94 @@
+"""Metadata round-trip tests across supported containers."""
+
+from __future__ import annotations
+
+from io import BytesIO
+from pathlib import Path
+
+import pytest
+from PIL import Image
+
+from trackstash.core.metadata import (
+    read_artwork,
+    read_metadata,
+    remove_artwork,
+    supported_extensions,
+    write_artwork,
+    write_tags,
+)
+
+AUDIO_EXTENSIONS = ["flac", "mp3", "m4a", "ogg", "opus", "wav", "aiff", "wv"]
+
+
+def _tag_bytes() -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (16, 16), (180, 40, 40)).save(buffer, "JPEG")
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("extension", AUDIO_EXTENSIONS)
+def test_metadata_round_trip(audio_factory: Path, extension: str) -> None:
+    path = audio_factory / f"sample.{extension}"
+    metadata = read_metadata(path)
+
+    assert metadata.format
+    assert metadata.duration > 0
+    assert metadata.file_size > 0
+
+    updated = write_tags(
+        path,
+        {
+            "title": "Round Trip",
+            "artists": ["Artist One", "Artist Two"],
+            "album": "Test Album",
+            "album_artist": "Artist One",
+            "genres": ["Rock", "Pop"],
+            "year": "2024",
+            "track": 2,
+            "track_total": 9,
+            "disc": 1,
+            "disc_total": 2,
+            "comment": "A comment",
+            "composer": "Composer",
+            "bpm": "128",
+            "musical_key": "Am",
+            "isrc": "ABC123",
+        },
+    )
+
+    assert updated.tags.title == "Round Trip"
+    assert updated.tags.artists == ["Artist One", "Artist Two"]
+    assert updated.tags.album == "Test Album"
+    assert updated.tags.album_artist == "Artist One"
+    assert updated.tags.genres == ["Rock", "Pop"]
+    assert updated.tags.track == 2
+    assert updated.tags.track_total == 9
+    assert updated.tags.disc == 1
+    assert updated.tags.disc_total == 2
+    assert updated.tags.bpm == "128"
+    assert updated.tags.musical_key == "Am"
+
+    write_artwork(path, _tag_bytes(), mime="image/jpeg")
+    artwork = read_artwork(path)
+    assert len(artwork) == 1
+    assert artwork[0].mime == "image/jpeg"
+    assert artwork[0].width == 16
+
+    remove_artwork(path)
+    assert read_artwork(path) == []
+
+
+@pytest.mark.parametrize("extension", ["flac", "mp3", "m4a", "ogg", "opus", "wav", "aiff"])
+def test_clearing_fields(audio_factory: Path, extension: str) -> None:
+    path = audio_factory / f"sample.{extension}"
+    write_tags(path, {"title": "Temporary", "artists": ["Temporary Artist"]})
+    cleared = write_tags(path, {"title": "", "artists": []})
+
+    assert cleared.tags.title == ""
+    assert cleared.tags.artists == []
+
+
+def test_supported_extensions_include_target_formats() -> None:
+    extensions = supported_extensions()
+    for extension in (".flac", ".mp3", ".m4a", ".ogg", ".opus", ".ape", ".wv"):
+        assert extension in extensions

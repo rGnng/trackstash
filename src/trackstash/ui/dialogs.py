@@ -1,0 +1,550 @@
+"""Modal workflows for tag editing, import, organization, and deletion."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from trackstash.core.db import Library
+from trackstash.core.library import (
+    ImportPlan,
+    ImportResult,
+    LibraryService,
+    OrganizePlanItem,
+    OrganizeResult,
+    TagChange,
+)
+from trackstash.core.template import DEFAULT_TEMPLATE
+
+TAG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("title", "Title"),
+    ("artists", "Artists (comma separated)"),
+    ("album_artist", "Album artist"),
+    ("album", "Album"),
+    ("genres", "Genres (comma separated)"),
+    ("year", "Year"),
+    ("track", "Track number"),
+    ("track_total", "Track total"),
+    ("disc", "Disc number"),
+    ("disc_total", "Disc total"),
+    ("comment", "Comment"),
+    ("composer", "Composer"),
+    ("bpm", "BPM"),
+    ("musical_key", "Musical key"),
+    ("isrc", "ISRC"),
+    ("label", "Label"),
+    ("catalog_number", "Catalog number"),
+    ("original_date", "Original date"),
+)
+
+
+def _values_text(value: object) -> str:
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value)
+    return str(value or "")
+
+
+def _parse_value(key: str, text: str) -> object:
+    if key in {"artists", "genres"}:
+        return [part.strip() for part in text.split(",") if part.strip()]
+    if key in {"track", "track_total", "disc", "disc_total"}:
+        try:
+            return int(text.strip() or 0)
+        except ValueError:
+            return 0
+    return text.strip()
+
+
+class TagEditorDialog(QDialog):
+    """Edit a single track or a checked subset of fields for many tracks."""
+
+    def __init__(
+        self,
+        service: LibraryService,
+        track_ids: Sequence[str],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.service = service
+        self.track_ids = list(track_ids)
+        self._lines: dict[str, QLineEdit] = {}
+        self._checks: dict[str, QCheckBox] = {}
+        self.setWindowTitle("Edit Tags")
+        self.setMinimumWidth(520)
+
+        tags = service.db.load_tag_set(self.track_ids[0]) if self.track_ids else None
+        single = len(self.track_ids) == 1
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        for key, label in TAG_FIELDS:
+            row = QWidget(self)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            check = QCheckBox(row)
+            check.setChecked(single)
+            check.setVisible(not single)
+            line = QLineEdit(row)
+            line.setPlaceholderText("Leave unchanged" if not single else "")
+            if tags is not None:
+                line.setText(_values_text(getattr(tags, key)))
+            row_layout.addWidget(check)
+            row_layout.addWidget(line, 1)
+            form.addRow(label, row)
+            self._lines[key] = line
+            self._checks[key] = check
+        layout.addLayout(form)
+
+        hint = QLabel(
+            "Single track: every field is written. Multiple tracks: check only "
+            "the fields to apply.",
+            self,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def edits(self) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, line in self._lines.items():
+            if not self._checks[key].isChecked():
+                continue
+            result[key] = _parse_value(key, line.text())
+        return result
+
+    def accept(self) -> None:
+        if not self.edits():
+            QMessageBox.warning(self, "No changes", "Select at least one field to apply.")
+            return
+        super().accept()
+
+
+class TagPreviewDialog(QDialog):
+    """Show a per-file tag diff before writing."""
+
+    def __init__(self, changes: Sequence[TagChange], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Preview Tag Changes")
+        self.resize(780, 420)
+        layout = QVBoxLayout(self)
+        table = QTableWidget(len(changes), 3, self)
+        table.setHorizontalHeaderLabels(["File", "Changed fields", "Warning"])
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(True)
+        for row, change in enumerate(changes):
+            table.setItem(row, 0, QTableWidgetItem(Path(change.path).name))
+            table.setItem(row, 1, QTableWidgetItem(", ".join(change.changed_fields)))
+            table.setItem(row, 2, QTableWidgetItem(change.warning))
+        layout.addWidget(table)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
+class BulkImportEditDialog(QDialog):
+    """Optional tag overrides applied to every file in an import."""
+
+    FIELDS = (
+        ("album_artist", "Album artist"),
+        ("album", "Album"),
+        ("genres", "Genres (comma separated)"),
+        ("year", "Year"),
+        ("comment", "Comment"),
+    )
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Import Tag Overrides")
+        self._lines: dict[str, QLineEdit] = {}
+        self._checks: dict[str, QCheckBox] = {}
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        for key, label in self.FIELDS:
+            row = QWidget(self)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            check = QCheckBox(row)
+            line = QLineEdit(row)
+            line.setPlaceholderText("Leave unchanged")
+            row_layout.addWidget(check)
+            row_layout.addWidget(line, 1)
+            form.addRow(label, row)
+            self._lines[key] = line
+            self._checks[key] = check
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def edits(self) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, line in self._lines.items():
+            if self._checks[key].isChecked():
+                result[key] = _parse_value(key, line.text())
+        return result
+
+
+class ImportDialog(QDialog):
+    """Preview and execute a managed-library import."""
+
+    def __init__(
+        self,
+        service: LibraryService,
+        libraries: Sequence[Library],
+        current_library_id: str | None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.service = service
+        self.plan: ImportPlan | None = None
+        self.import_result: ImportResult | None = None
+        self.common_edits: dict[str, object] = {}
+        self.setWindowTitle("Import into Library")
+        self.resize(960, 560)
+
+        layout = QVBoxLayout(self)
+        source_row = QHBoxLayout()
+        self.source_edit = QLineEdit(self)
+        self.source_edit.setPlaceholderText("Folder or file to import")
+        browse = QPushButton("Browse…", self)
+        browse.clicked.connect(self._browse)
+        source_row.addWidget(QLabel("Source", self))
+        source_row.addWidget(self.source_edit, 1)
+        source_row.addWidget(browse)
+        layout.addLayout(source_row)
+
+        options = QHBoxLayout()
+        options.addWidget(QLabel("Library", self))
+        self.library_combo = QComboBox(self)
+        for library in libraries:
+            self.library_combo.addItem(library.name, library.id)
+            if library.id == current_library_id:
+                self.library_combo.setCurrentIndex(self.library_combo.count() - 1)
+        options.addWidget(self.library_combo)
+        options.addWidget(QLabel("Mode", self))
+        self.mode_combo = QComboBox(self)
+        self.mode_combo.addItem("Copy (recommended)", "copy")
+        self.mode_combo.addItem("Move", "move")
+        options.addWidget(self.mode_combo)
+        options.addWidget(QLabel("Duplicates", self))
+        self.duplicate_combo = QComboBox(self)
+        self.duplicate_combo.addItem("Skip", "skip")
+        self.duplicate_combo.addItem("Keep both", "keep")
+        self.duplicate_combo.addItem("Replace", "replace")
+        options.addWidget(self.duplicate_combo)
+        layout.addLayout(options)
+
+        template_row = QHBoxLayout()
+        template_row.addWidget(QLabel("Destination template", self))
+        self.template_edit = QLineEdit(DEFAULT_TEMPLATE, self)
+        template_row.addWidget(self.template_edit, 1)
+        overrides = QPushButton("Tag overrides…", self)
+        overrides.clicked.connect(self._edit_overrides)
+        template_row.addWidget(overrides)
+        layout.addLayout(template_row)
+
+        self.table = QTableWidget(0, 4, self)
+        self.table.setHorizontalHeaderLabels(["Source", "Destination", "Action", "Note"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        layout.addWidget(self.table, 1)
+
+        self.status = QLabel("Choose a source and preview the import.", self)
+        layout.addWidget(self.status)
+
+        buttons = QHBoxLayout()
+        self.preview_button = QPushButton("Preview", self)
+        self.preview_button.clicked.connect(self.preview)
+        self.import_button = QPushButton("Import", self)
+        self.import_button.setEnabled(False)
+        self.import_button.clicked.connect(self.execute)
+        cancel = QPushButton("Cancel", self)
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(self.preview_button)
+        buttons.addWidget(self.import_button)
+        buttons.addStretch(1)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+
+    def _browse(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Choose a folder to import")
+        if folder:
+            self.source_edit.setText(folder)
+
+    def _edit_overrides(self) -> None:
+        dialog = BulkImportEditDialog(self)
+        if dialog.exec():
+            self.common_edits = dialog.edits()
+            self.plan = None
+            self.import_button.setEnabled(False)
+            self.status.setText("Tag overrides changed; preview again.")
+
+    def preview(self) -> None:
+        source = self.source_edit.text().strip()
+        library_id = self.library_combo.currentData()
+        if not source or not library_id:
+            QMessageBox.warning(self, "Import", "Choose a source and a target library.")
+            return
+        self.status.setText("Planning import…")
+        QApplication.processEvents()
+        try:
+            plan = self.service.plan_import(
+                [source],
+                str(library_id),
+                mode=str(self.mode_combo.currentData()),
+                template=self.template_edit.text().strip() or DEFAULT_TEMPLATE,
+                common_edits=self.common_edits,
+                duplicate_policy=str(self.duplicate_combo.currentData()),
+                progress=self._progress,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Import failed", str(exc))
+            return
+        self.plan = plan
+        self.table.setRowCount(len(plan.items))
+        for row, item in enumerate(plan.items):
+            self.table.setItem(row, 0, QTableWidgetItem(str(item.source)))
+            self.table.setItem(row, 1, QTableWidgetItem(str(item.destination)))
+            self.table.setItem(row, 2, QTableWidgetItem(item.action))
+            note = item.warning
+            if item.collision:
+                note = (note + " collision resolved").strip()
+            self.table.setItem(row, 3, QTableWidgetItem(note))
+        self.import_button.setEnabled(
+            bool(plan.items) and any(item.action != "skip" for item in plan.items)
+        )
+        self.status.setText(f"{len(plan.items)} files planned, {len(plan.errors)} errors.")
+
+    def _progress(self, phase: str, current: int, total: int, message: str) -> None:
+        suffix = f" {current}/{total}" if total else ""
+        self.status.setText(f"{phase}{suffix} {Path(message).name if message else ''}")
+        QApplication.processEvents()
+
+    def execute(self) -> None:
+        if self.plan is None:
+            self.preview()
+        if self.plan is None:
+            return
+        self.import_button.setEnabled(False)
+        try:
+            result = self.service.execute_import(self.plan, progress=self._progress)
+        except Exception as exc:
+            QMessageBox.critical(self, "Import failed", str(exc))
+            self.import_button.setEnabled(True)
+            return
+        self.import_result = result
+        QMessageBox.information(
+            self,
+            "Import complete",
+            f"Imported {len(result.imported)} tracks.\n"
+            f"Skipped {len(result.skipped)}.\n"
+            f"Errors {len(result.errors)}.",
+        )
+        self.accept()
+
+
+class OrganizeDialog(QDialog):
+    """Preview and execute a tag-driven organization pass."""
+
+    def __init__(
+        self,
+        service: LibraryService,
+        track_ids: Sequence[str],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.service = service
+        self.track_ids = list(track_ids)
+        self.items: list[OrganizePlanItem] = []
+        self.organize_result: OrganizeResult | None = None
+        self.setWindowTitle("Organize Files")
+        self.resize(980, 540)
+        layout = QVBoxLayout(self)
+        template_row = QHBoxLayout()
+        template_row.addWidget(QLabel("Template", self))
+        self.template_edit = QLineEdit(DEFAULT_TEMPLATE, self)
+        template_row.addWidget(self.template_edit, 1)
+        layout.addLayout(template_row)
+
+        self.table = QTableWidget(0, 4, self)
+        self.table.setHorizontalHeaderLabels(["Current path", "New path", "New UUID", "Status"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        layout.addWidget(self.table, 1)
+
+        self.status = QLabel("Preview the move before executing.", self)
+        layout.addWidget(self.status)
+
+        buttons = QHBoxLayout()
+        preview = QPushButton("Preview", self)
+        preview.clicked.connect(self.preview)
+        execute = QPushButton("Organize", self)
+        execute.clicked.connect(self.execute)
+        cancel = QPushButton("Cancel", self)
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(preview)
+        buttons.addWidget(execute)
+        buttons.addStretch(1)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+
+    def preview(self) -> None:
+        self.status.setText("Planning…")
+        QApplication.processEvents()
+        try:
+            self.items = self.service.preview_organize(
+                self.track_ids, self.template_edit.text().strip() or DEFAULT_TEMPLATE
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Organize failed", str(exc))
+            return
+        self.table.setRowCount(len(self.items))
+        for row, item in enumerate(self.items):
+            self.table.setItem(row, 0, QTableWidgetItem(item.old_path))
+            self.table.setItem(row, 1, QTableWidgetItem(item.new_path))
+            self.table.setItem(row, 2, QTableWidgetItem(item.new_id))
+            status = "unchanged" if item.unchanged else "collision" if item.collision else "move"
+            self.table.setItem(row, 3, QTableWidgetItem(status))
+        self.status.setText(f"{len(self.items)} tracks previewed.")
+
+    def execute(self) -> None:
+        if not self.items:
+            self.preview()
+        if not self.items:
+            return
+        try:
+            self.organize_result = self.service.organize(self.items, progress=self._progress)
+        except Exception as exc:
+            QMessageBox.critical(self, "Organize failed", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            "Organize complete",
+            f"Moved {len(self.organize_result.moved)} tracks.\n"
+            f"Errors {len(self.organize_result.errors)}.",
+        )
+        self.accept()
+
+    def _progress(self, phase: str, current: int, total: int, message: str) -> None:
+        self.status.setText(f"{phase} {current}/{total}")
+        QApplication.processEvents()
+
+
+class DeleteDialog(QDialog):
+    """Choose index-only deletion or moving files to the macOS Trash."""
+
+    def __init__(self, count: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Delete Tracks")
+        self.setMinimumWidth(460)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"Delete {count} selected track(s).", self))
+        self.index_only = QRadioButton("Remove from the library index only (undoable)", self)
+        self.index_only.setChecked(True)
+        self.trash_files = QRadioButton("Remove from the index and move files to the Trash", self)
+        layout.addWidget(self.index_only)
+        layout.addWidget(self.trash_files)
+        warning = QLabel(
+            "Moving files to the macOS Trash cannot be undone inside TrackStash.",
+            self,
+        )
+        warning.setWordWrap(True)
+        layout.addWidget(warning)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def delete_files(self) -> bool:
+        return self.trash_files.isChecked()
+
+
+class MissingFilesDialog(QDialog):
+    """Review and select missing paths for index removal."""
+
+    def __init__(self, paths: Sequence[str], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Missing Files")
+        self.resize(760, 420)
+        layout = QVBoxLayout(self)
+        layout.addWidget(
+            QLabel(
+                "These files are indexed but no longer exist. Nothing is removed "
+                "unless you select it.",
+                self,
+            )
+        )
+        self.list = QListWidget(self)
+        for path in paths:
+            item = QListWidgetItem(path, self.list)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+        layout.addWidget(self.list, 1)
+        buttons_row = QHBoxLayout()
+        select_all = QPushButton("Select all", self)
+        select_all.clicked.connect(lambda: self._set_all(Qt.CheckState.Checked))
+        clear = QPushButton("Clear", self)
+        clear.clicked.connect(lambda: self._set_all(Qt.CheckState.Unchecked))
+        buttons_row.addWidget(select_all)
+        buttons_row.addWidget(clear)
+        buttons_row.addStretch(1)
+        layout.addLayout(buttons_row)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _set_all(self, state: Qt.CheckState) -> None:
+        for index in range(self.list.count()):
+            self.list.item(index).setCheckState(state)
+
+    def selected_paths(self) -> list[str]:
+        return [
+            self.list.item(index).text()
+            for index in range(self.list.count())
+            if self.list.item(index).checkState() == Qt.CheckState.Checked
+        ]
