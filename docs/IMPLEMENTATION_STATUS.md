@@ -38,7 +38,7 @@
 Test status at the time of writing:
 
 ```text
-55 passed, 2 skipped (default suite)
+56 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 

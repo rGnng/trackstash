@@ -220,3 +220,31 @@ def test_settings_can_choose_track_columns(qtbot: QtBot, tmp_path: Path) -> None
     assert dialog.column_checks["codec"].isChecked()
     assert dialog.column_checks["path"].isChecked() is False
     assert dialog.values()[3] == ["title", "codec"]
+
+
+def test_inline_save_and_table_sorting(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path, monkeypatch
+) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QDialog, QMessageBox
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.table.selectRow(0)
+
+    monkeypatch.setattr(
+        "trackstash.ui.main_window.TagPreviewDialog.exec",
+        lambda self: QDialog.DialogCode.Accepted,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    window.save_inline_edits({"title": "Inline Edited"})
+    tracks = database.list_tracks(library_id=library.id)
+    assert tracks[0].title == "Inline Edited"
+    assert window.editor.lines["title"].text() == "Inline Edited"
+
+    window.table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
+    assert window.model.rowCount() >= 1
