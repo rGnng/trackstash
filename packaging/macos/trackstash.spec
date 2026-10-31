@@ -59,7 +59,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="TrackStash.app",
-    icon=None,
+    icon=os.path.join(ROOT, "packaging", "macos", "TrackStash.icns"),
     bundle_identifier="app.trackstash.TrackStash",
     info_plist={
         "CFBundleDisplayName": "TrackStash",
