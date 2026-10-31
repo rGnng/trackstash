@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import multiprocessing
+
 from trackstash.app import run
 
 
 def main() -> int:
     """Run TrackStash and return the process exit code."""
+    multiprocessing.freeze_support()
     return run()
 
 

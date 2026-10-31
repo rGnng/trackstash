@@ -34,6 +34,7 @@ dev = [
   "pytest-qt>=4.4,<5",
   "ruff>=0.9,<1",
   "mypy>=1.14,<2",
+  "pyinstaller>=6.12,<7",
 ]
 
 [build-system]
@@ -96,6 +97,9 @@ minversion = "8.0"
 testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers"]
 qt_api = "pyside6"
+markers = [
+  "integration: opt-in tests that read real music folders",
+]
 
 [tool.coverage.run]
 source = ["trackstash"]

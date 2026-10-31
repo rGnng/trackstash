@@ -17,6 +17,7 @@ from trackstash.core.identity import (
     album_uuid,
     artist_uuid,
     canonical_path,
+    is_under,
     library_uuid,
     normalize_identifier,
     relative_path,
@@ -387,6 +388,10 @@ class Database:
         root_path = canonical_path(str(root))
         if not Path(root_path).is_dir():
             raise ValueError(f"Library folder does not exist: {root_path}")
+        existing_roots = [library.path for library in self.list_libraries()]
+        for existing in existing_roots:
+            if is_under(root_path, existing) or is_under(existing, root_path):
+                raise ValueError("Library folders must not overlap")
         if not identifier:
             with self.connect() as connection:
                 identifiers = {
@@ -445,11 +450,59 @@ class Database:
                 "UPDATE libraries SET enabled = ? WHERE id = ?", (int(enabled), library_id)
             )
 
-    def remove_library(self, library_id: str) -> None:
+    def set_library_namespace(self, library_id: str, namespace: str) -> None:
         with self.transaction() as connection:
-            connection.execute("DELETE FROM songs WHERE library_id = ?", (library_id,))
-            connection.execute("DELETE FROM libraries WHERE id = ?", (library_id,))
-            self._cleanup_orphans(connection)
+            connection.execute(
+                "UPDATE libraries SET id_namespace = ? WHERE id = ?",
+                (namespace, library_id),
+            )
+
+    def rename_library(
+        self,
+        library_id: str,
+        *,
+        name: str | None = None,
+        identifier: str | None = None,
+    ) -> Library:
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM libraries WHERE id = ?", (library_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("Library not found")
+            new_name = (name if name is not None else row["name"]).strip()
+            new_identifier = (identifier if identifier is not None else row["identifier"]).strip()
+            namespace = normalize_identifier(new_identifier)
+            if not new_name or not namespace:
+                raise ValueError("Library name and identifier must not be empty")
+            for other in connection.execute(
+                "SELECT id, identifier, id_namespace FROM libraries WHERE id != ?",
+                (library_id,),
+            ):
+                if (
+                    normalize_identifier(other["identifier"]) == namespace
+                    or normalize_identifier(other["id_namespace"]) == namespace
+                ):
+                    raise ValueError("Library identifier is already in use")
+            connection.execute(
+                "UPDATE libraries SET name = ?, identifier = ? WHERE id = ?",
+                (new_name, new_identifier, library_id),
+            )
+        library = self.get_library(library_id)
+        if library is None:
+            raise RuntimeError("Library disappeared after rename")
+        return library
+
+    def remove_library(self, library_id: str) -> int:
+        return self.delete_library_rows(library_id)
+
+    def backup(self, destination: str | Path) -> Path:
+        """Create a consistent SQLite backup at ``destination``."""
+        target = Path(destination).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as source, sqlite3.connect(str(target)) as sink:
+            source.backup(sink)
+        return target
 
     def library_track_count(self, library_id: str) -> int:
         with self.connect() as connection:
@@ -893,6 +946,43 @@ class Database:
             row["path"]: (row["id"], float(row["mtime"]), int(row["file_size"])) for row in rows
         }
 
+    def hash_map(self, library_id: str) -> dict[str, str]:
+        """Return content hash to song ID for a library."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT f.content_hash, s.id FROM ts_file_state f"
+                " JOIN songs s ON s.id = f.song_id"
+                " WHERE s.library_id = ? AND f.content_hash IS NOT NULL"
+                " AND f.content_hash != ''",
+                (library_id,),
+            ).fetchall()
+        return {str(row["content_hash"]): str(row["id"]) for row in rows}
+
+    def set_scan_error(self, song_id: str, error: str) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT INTO ts_file_state(song_id, scan_error) VALUES(?, ?)"
+                " ON CONFLICT(song_id) DO UPDATE SET scan_error = excluded.scan_error",
+                (song_id, error),
+            )
+
+    def library_stats(self, library_id: str | None = None) -> dict[str, int]:
+        with self.connect() as connection:
+            clause = " WHERE s.library_id = ?" if library_id else ""
+            parameters = (library_id,) if library_id else ()
+            row = connection.execute(
+                "SELECT COUNT(*) AS tracks, COALESCE(SUM(s.file_size), 0) AS bytes,"
+                " COUNT(DISTINCT s.album_id) AS albums,"
+                " COUNT(DISTINCT s.artist_id) AS artists FROM songs s" + clause,
+                parameters,
+            ).fetchone()
+        return {
+            "tracks": int(row["tracks"]),
+            "bytes": int(row["bytes"]),
+            "albums": int(row["albums"]),
+            "artists": int(row["artists"]),
+        }
+
     def missing_paths(self, library_id: str, discovered: set[str]) -> list[str]:
         with self.connect() as connection:
             rows = connection.execute(
@@ -1107,6 +1197,19 @@ class Database:
                 " WHERE undoable = 1 AND undone = 0 AND status = 'completed'"
                 " ORDER BY finished_at DESC, started_at DESC LIMIT 1"
             ).fetchone()
+        return self._operation_from_row(row)
+
+    def latest_undone_operation(self) -> Operation | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM ts_operations"
+                " WHERE undoable = 1 AND undone = 1 AND status = 'undone'"
+                " ORDER BY finished_at DESC, started_at DESC LIMIT 1"
+            ).fetchone()
+        return self._operation_from_row(row)
+
+    @staticmethod
+    def _operation_from_row(row: sqlite3.Row | None) -> Operation | None:
         if row is None:
             return None
         return Operation(

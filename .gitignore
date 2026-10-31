@@ -8,6 +8,7 @@ __pycache__/
 build/
 dist/
 *.spec
+!packaging/macos/*.spec
 artifacts/
 
 # Test and tool caches

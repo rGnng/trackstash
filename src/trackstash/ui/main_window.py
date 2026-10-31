@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QAction, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressDialog,
     QPushButton,
@@ -34,12 +37,15 @@ from PySide6.QtWidgets import (
 
 from trackstash import __version__
 from trackstash.core.db import Database, Library, Track
-from trackstash.core.library import LibraryService, ScanResult
+from trackstash.core.library import LibraryService, ScanResult, content_hash
+from trackstash.core.template import DEFAULT_TEMPLATE
 from trackstash.ui.dialogs import (
     DeleteDialog,
+    DuplicateDialog,
     ImportDialog,
     MissingFilesDialog,
     OrganizeDialog,
+    SettingsDialog,
     TagEditorDialog,
     TagPreviewDialog,
 )
@@ -59,6 +65,13 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.db = db
         self.service = LibraryService(db, artwork_dir=artwork_dir)
+        self.service.default_template = db.get_setting("default_template", DEFAULT_TEMPLATE)
+        try:
+            self.service.cover_size = int(db.get_setting("cover_size", "500") or 500)
+            self.service.cover_quality = int(db.get_setting("cover_quality", "80") or 80)
+        except ValueError:
+            self.service.cover_size = 500
+            self.service.cover_quality = 80
         self._current_library_id: str | None = None
         self._libraries: list[Library] = []
 
@@ -107,6 +120,24 @@ class MainWindow(QMainWindow):
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.triggered.connect(self.undo)
 
+        self.redo_action = QAction("Redo", self)
+        self.redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        self.redo_action.triggered.connect(self.redo)
+
+        self.duplicates_action = QAction("Find Duplicates…", self)
+        self.duplicates_action.triggered.connect(self.find_duplicates)
+
+        self.set_cover_action = QAction("Set Cover…", self)
+        self.set_cover_action.triggered.connect(self.set_cover)
+        self.remove_cover_action = QAction("Remove Cover", self)
+        self.remove_cover_action.triggered.connect(self.remove_cover)
+        self.extract_cover_action = QAction("Extract Cover…", self)
+        self.extract_cover_action.triggered.connect(self.extract_cover)
+
+        self.settings_action = QAction("Settings…", self)
+        self.settings_action.setShortcut(QKeySequence("Ctrl+,"))
+        self.settings_action.triggered.connect(self.open_settings)
+
         self.refresh_action = QAction("Refresh", self)
         self.refresh_action.setShortcut(QKeySequence.StandardKey.Refresh)
         self.refresh_action.triggered.connect(self.refresh_tracks)
@@ -131,10 +162,18 @@ class MainWindow(QMainWindow):
         library_menu.addSeparator()
         library_menu.addAction(self.organize_action)
         library_menu.addAction(self.delete_action)
+        library_menu.addSeparator()
+        library_menu.addAction(self.duplicates_action)
+        library_menu.addAction(self.set_cover_action)
+        library_menu.addAction(self.remove_cover_action)
+        library_menu.addAction(self.extract_cover_action)
 
         edit_menu = self.menuBar().addMenu("&Edit")
         edit_menu.addAction(self.edit_action)
         edit_menu.addAction(self.undo_action)
+        edit_menu.addAction(self.redo_action)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.settings_action)
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.about_action)
@@ -150,6 +189,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.edit_action)
         toolbar.addAction(self.organize_action)
         toolbar.addAction(self.delete_action)
+        toolbar.addAction(self.duplicates_action)
         toolbar.addSeparator()
         toolbar.addAction(self.undo_action)
         self.addToolBar(toolbar)
@@ -165,6 +205,8 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(heading)
         self.library_list = QListWidget(sidebar)
         self.library_list.currentItemChanged.connect(self._library_changed)
+        self.library_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.library_list.customContextMenuRequested.connect(self._library_context_menu)
         sidebar_layout.addWidget(self.library_list, 1)
         add_button = QPushButton("Add Library…", sidebar)
         add_button.clicked.connect(self.add_library)
@@ -178,9 +220,19 @@ class MainWindow(QMainWindow):
         self.search_edit.setPlaceholderText("Search title, artist, album, genre, path…")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self.refresh_tracks)
+        self.format_filter = QComboBox(center)
+        self.format_filter.addItem("All formats", "")
+        for extension in ("FLAC", "MP3", "M4A", "OGG", "OPUS", "APE", "WV", "WAV", "AIFF"):
+            self.format_filter.addItem(extension, extension)
+        self.format_filter.currentIndexChanged.connect(self.refresh_tracks)
+        self.missing_artwork = QCheckBox("Missing artwork", center)
+        self.missing_artwork.stateChanged.connect(self.refresh_tracks)
+        self.missing_artwork.setToolTip("Show only tracks without a cached cover")
         refresh_button = QPushButton("Refresh", center)
         refresh_button.clicked.connect(self.refresh_tracks)
         search_row.addWidget(self.search_edit, 1)
+        search_row.addWidget(self.format_filter)
+        search_row.addWidget(self.missing_artwork)
         search_row.addWidget(refresh_button)
         center_layout.addLayout(search_row)
 
@@ -245,6 +297,17 @@ class MainWindow(QMainWindow):
         self.edit_button = QPushButton("Edit Tags…", detail)
         self.edit_button.clicked.connect(self.edit_tags)
         detail_layout.addWidget(self.edit_button)
+        artwork_buttons = QHBoxLayout()
+        set_cover = QPushButton("Cover…", detail)
+        set_cover.clicked.connect(self.set_cover)
+        remove_cover = QPushButton("Remove", detail)
+        remove_cover.clicked.connect(self.remove_cover)
+        extract_cover = QPushButton("Extract…", detail)
+        extract_cover.clicked.connect(self.extract_cover)
+        artwork_buttons.addWidget(set_cover)
+        artwork_buttons.addWidget(remove_cover)
+        artwork_buttons.addWidget(extract_cover)
+        detail_layout.addLayout(artwork_buttons)
         splitter.addWidget(detail)
 
         splitter.setStretchFactor(0, 0)
@@ -269,7 +332,8 @@ class MainWindow(QMainWindow):
         self.library_list.addItem(all_item)
         for library in self._libraries:
             count = self.db.library_track_count(library.id)
-            item = QListWidgetItem(f"{library.name}  ({count})")
+            suffix = "" if library.enabled else " · disabled"
+            item = QListWidgetItem(f"{library.name}  ({count}){suffix}")
             item.setData(Qt.ItemDataRole.UserRole, library.id)
             self.library_list.addItem(item)
         self.library_list.blockSignals(False)
@@ -287,15 +351,102 @@ class MainWindow(QMainWindow):
         )
         self.refresh_tracks()
 
+    def _library_context_menu(self, position: QPoint) -> None:
+        item = self.library_list.itemAt(position)
+        if item is None:
+            return
+        library_id = item.data(Qt.ItemDataRole.UserRole)
+        library = self.db.get_library(library_id) if library_id else None
+        if library is None:
+            return
+        menu = QMenu(self)
+        rename = menu.addAction("Rename / Change Identifier…")
+        rekey = menu.addAction("ReKey IDs…")
+        toggle = menu.addAction("Disable Library" if library.enabled else "Enable Library")
+        menu.addSeparator()
+        remove = menu.addAction("Remove Library Index…")
+        chosen = menu.exec(self.library_list.mapToGlobal(position))
+        if chosen == rename:
+            name, accepted = QInputDialog.getText(
+                self, "Library Name", "Display name:", text=library.name
+            )
+            if not accepted:
+                return
+            identifier, accepted = QInputDialog.getText(
+                self,
+                "Library Identifier",
+                "Identifier (namespace stays unchanged until ReKey):",
+                text=library.identifier,
+            )
+            if not accepted:
+                return
+            try:
+                self.db.rename_library(library.id, name=name or library.name, identifier=identifier)
+            except Exception as exc:
+                QMessageBox.critical(self, "Rename failed", str(exc))
+            self.refresh_libraries()
+        elif chosen == rekey:
+            answer = QMessageBox.question(
+                self,
+                "ReKey Library",
+                f"Recompute all song IDs for “{library.name}” using the current "
+                "identifier? A database backup is written first.",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                result = self.service.rekey_library(library.id)
+            except Exception as exc:
+                QMessageBox.critical(self, "ReKey failed", str(exc))
+                return
+            self.refresh_libraries()
+            self.refresh_tracks()
+            QMessageBox.information(
+                self,
+                "ReKey complete",
+                f"Updated {result.updated} song IDs.\nBackup: {result.backup}",
+            )
+        elif chosen == toggle:
+            self.db.set_library_enabled(library.id, not library.enabled)
+            self.refresh_libraries()
+            self.refresh_tracks()
+        elif chosen == remove:
+            answer = QMessageBox.question(
+                self,
+                "Remove Library",
+                f"Remove the index for “{library.name}”?\n\n"
+                "Files on disk are never touched. This cannot be undone.",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            self.db.remove_library(library.id)
+            self._current_library_id = None
+            self.refresh_libraries()
+            self.refresh_tracks()
+
     def refresh_tracks(self) -> None:
         query = self.search_edit.text().strip() if hasattr(self, "search_edit") else ""
         tracks = self.db.list_tracks(library_id=self._current_library_id, query=query)
+        if hasattr(self, "format_filter"):
+            format_value = str(self.format_filter.currentData() or "")
+            if format_value:
+                tracks = [track for track in tracks if track.format.upper() == format_value]
+        if self._current_library_id is None:
+            enabled = {library.id for library in self._libraries if library.enabled}
+            tracks = [track for track in tracks if track.library_id in enabled]
+        if hasattr(self, "missing_artwork") and self.missing_artwork.isChecked():
+            tracks = [track for track in tracks if not self._track_has_artwork(track)]
         self.model.set_tracks(tracks)
         library_label = "All Tracks"
         if self._current_library_id:
             library = self.db.get_library(self._current_library_id)
             library_label = library.name if library else "Library"
         self.statusBar().showMessage(f"{library_label} · {len(tracks)} tracks")
+
+    def _track_has_artwork(self, track: Track) -> bool:
+        if track.artwork_path and Path(track.artwork_path).is_file():
+            return True
+        return (self.service.artwork_dir / f"{track.album_id.upper()}.jpg").is_file()
 
     def _selection_changed(self, *_args: object) -> None:
         ids = self.selected_track_ids()
@@ -564,6 +715,130 @@ class MainWindow(QMainWindow):
             message += "\n" + "\n".join(result.errors[:10])
             QMessageBox.warning(self, "Undo warnings", message)
         self.statusBar().showMessage(message)
+
+    def redo(self) -> None:
+        result = self.service.redo_last()
+        if result is None:
+            QMessageBox.information(self, "Redo", "There is no operation to redo.")
+            return
+        self.refresh_libraries()
+        self.refresh_tracks()
+        message = f"Redid {result.kind}: {result.undone} changes."
+        if result.errors:
+            message += "\n" + "\n".join(result.errors[:10])
+            QMessageBox.warning(self, "Redo warnings", message)
+        self.statusBar().showMessage(message)
+
+    def find_duplicates(self) -> None:
+        self.statusBar().showMessage("Hashing tracks…")
+        QApplication.processEvents()
+        tracks = self.db.list_tracks(library_id=self._current_library_id)
+        for index, track in enumerate(tracks, start=1):
+            if self.db.get_content_hash(track.id):
+                continue
+            try:
+                self.db.update_content_hash(track.id, content_hash(track.path))
+            except OSError:
+                continue
+            if index % 25 == 0:
+                self.statusBar().showMessage(f"Hashing tracks… {index}/{len(tracks)}")
+                QApplication.processEvents()
+        exact = self.db.exact_duplicate_groups()
+        probable = self.db.probable_duplicate_groups()
+        if not exact and not probable:
+            QMessageBox.information(self, "Duplicates", "No duplicate groups were found.")
+            return
+        dialog = DuplicateDialog(exact, probable, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_ids:
+            result = self.service.delete_tracks(dialog.selected_ids)
+            self.refresh_libraries()
+            self.refresh_tracks()
+            if result.errors:
+                QMessageBox.warning(self, "Duplicate removal", "\n".join(result.errors[:10]))
+            self.statusBar().showMessage(f"Removed {result.deleted} duplicate rows from the index")
+
+    def set_cover(self) -> None:
+        ids = self._require_selection()
+        if ids is None:
+            return
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose Cover Image",
+            str(Path.home()),
+            "Images (*.jpg *.jpeg *.png)",
+        )
+        if not filename:
+            return
+        try:
+            data = Path(filename).read_bytes()
+        except OSError as exc:
+            QMessageBox.critical(self, "Cover", str(exc))
+            return
+        errors = self.service.set_artwork(ids, data)
+        self.refresh_tracks()
+        if errors:
+            QMessageBox.warning(self, "Cover warnings", "\n".join(errors[:10]))
+        else:
+            self.statusBar().showMessage(f"Updated cover for {len(ids)} tracks")
+
+    def remove_cover(self) -> None:
+        ids = self._require_selection()
+        if ids is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Remove Artwork",
+            f"Remove embedded artwork from {len(ids)} selected track(s)?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        errors = self.service.remove_artwork(ids)
+        self.refresh_tracks()
+        if errors:
+            QMessageBox.warning(self, "Artwork warnings", "\n".join(errors[:10]))
+
+    def extract_cover(self) -> None:
+        ids = self._require_selection()
+        if ids is None:
+            return
+        if len(ids) != 1:
+            QMessageBox.information(
+                self, "Extract Cover", "Select exactly one track to extract its cover."
+            )
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Extract Cover",
+            str(Path.home() / "cover.jpg"),
+            "Images (*.jpg *.png)",
+        )
+        if not filename:
+            return
+        try:
+            path = self.service.extract_artwork(ids[0], filename)
+        except Exception as exc:
+            QMessageBox.critical(self, "Extract Cover", str(exc))
+            return
+        self.statusBar().showMessage(f"Cover written to {path}")
+
+    def open_settings(self) -> None:
+        dialog = SettingsDialog(
+            self.db,
+            self.service.default_template,
+            self.service.cover_size,
+            self.service.cover_quality,
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        template, cover_size, quality = dialog.values()
+        self.db.set_setting("default_template", template)
+        self.db.set_setting("cover_size", str(cover_size))
+        self.db.set_setting("cover_quality", str(quality))
+        self.service.default_template = template
+        self.service.cover_size = cover_size
+        self.service.cover_quality = quality
+        self.statusBar().showMessage("Settings saved")
 
     def show_about(self) -> None:
         QMessageBox.about(

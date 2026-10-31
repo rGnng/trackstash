@@ -22,13 +22,15 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from trackstash.core.db import Library
+from trackstash.core.db import Database, Library, Track
 from trackstash.core.library import (
     ImportPlan,
     ImportResult,
@@ -548,3 +550,154 @@ class MissingFilesDialog(QDialog):
             for index in range(self.list.count())
             if self.list.item(index).checkState() == Qt.CheckState.Checked
         ]
+
+
+class DuplicateDialog(QDialog):
+    """Review exact and probable duplicate groups."""
+
+    def __init__(
+        self,
+        exact_groups: Sequence[Sequence[Track]],
+        probable_groups: Sequence[Sequence[Track]],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Duplicate Review")
+        self.resize(980, 560)
+        self.selected_ids: list[str] = []
+        self._tables: list[QTableWidget] = []
+        layout = QVBoxLayout(self)
+        tabs = QTabWidget(self)
+        tabs.addTab(self._make_table(exact_groups, "Exact"), "Exact content")
+        tabs.addTab(self._make_table(probable_groups, "Probable"), "Probable matches")
+        layout.addWidget(tabs, 1)
+        hint = QLabel(
+            "Select the rows to remove from the index. Files are never deleted here.",
+            self,
+        )
+        layout.addWidget(hint)
+        buttons = QHBoxLayout()
+        remove = QPushButton("Remove selected from index", self)
+        remove.clicked.connect(self._remove_selected)
+        close = QPushButton("Close", self)
+        close.clicked.connect(self.reject)
+        buttons.addWidget(remove)
+        buttons.addStretch(1)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+
+    def _make_table(self, groups: Sequence[Sequence[Track]], label: str) -> QTableWidget:
+        rows = sum(len(group) for group in groups)
+        table = QTableWidget(rows, 7, self)
+        table.setHorizontalHeaderLabels(
+            [label, "Title", "Artist", "Album", "Format", "Bitrate", "Path"]
+        )
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(True)
+        row = 0
+        for group_index, group in enumerate(groups, start=1):
+            for track in group:
+                table.setItem(row, 0, QTableWidgetItem(str(group_index)))
+                table.setItem(row, 1, QTableWidgetItem(track.title))
+                table.setItem(row, 2, QTableWidgetItem(track.artist))
+                table.setItem(row, 3, QTableWidgetItem(track.album))
+                table.setItem(row, 4, QTableWidgetItem(track.format))
+                table.setItem(
+                    row,
+                    5,
+                    QTableWidgetItem(f"{track.bitrate} kbps" if track.bitrate else ""),
+                )
+                path_item = QTableWidgetItem(track.path)
+                path_item.setData(Qt.ItemDataRole.UserRole, track.id)
+                table.setItem(row, 6, path_item)
+                row += 1
+        self._tables.append(table)
+        return table
+
+    def _remove_selected(self) -> None:
+        ids: list[str] = []
+        for table in self._tables:
+            for index in table.selectionModel().selectedRows():
+                item = table.item(index.row(), 6)
+                if item is not None:
+                    track_id = item.data(Qt.ItemDataRole.UserRole)
+                    if track_id:
+                        ids.append(str(track_id))
+        if not ids:
+            QMessageBox.information(self, "Duplicates", "Select at least one duplicate row.")
+            return
+        self.selected_ids = sorted(set(ids))
+        self.accept()
+
+
+class SettingsDialog(QDialog):
+    """Application settings and database backup."""
+
+    def __init__(
+        self,
+        database: Database,
+        template: str,
+        cover_size: int,
+        quality: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.database = database
+        self.setWindowTitle("TrackStash Settings")
+        self.setMinimumWidth(600)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.template_edit = QLineEdit(template, self)
+        form.addRow("Default import template", self.template_edit)
+        self.cover_size = QSpinBox(self)
+        self.cover_size.setRange(64, 2000)
+        self.cover_size.setValue(cover_size)
+        form.addRow("Cover cache size (px)", self.cover_size)
+        self.quality = QSpinBox(self)
+        self.quality.setRange(15, 100)
+        self.quality.setValue(quality)
+        form.addRow("Cover JPEG quality", self.quality)
+        self.database_label = QLineEdit(str(database.path), self)
+        self.database_label.setReadOnly(True)
+        form.addRow("Database", self.database_label)
+        layout.addLayout(form)
+
+        backup_row = QHBoxLayout()
+        backup_row.addWidget(QLabel("Create a consistent SQLite backup.", self))
+        backup = QPushButton("Backup Database…", self)
+        backup.clicked.connect(self._backup)
+        backup_row.addStretch(1)
+        backup_row.addWidget(backup)
+        layout.addLayout(backup_row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _backup(self) -> None:
+        destination, _ = QFileDialog.getSaveFileName(
+            self,
+            "Backup Database",
+            str(Path.home() / "TrackStash-backup.sqlite"),
+            "SQLite Database (*.sqlite)",
+        )
+        if not destination:
+            return
+        try:
+            path = self.database.backup(destination)
+            QMessageBox.information(self, "Backup", f"Backup written to {path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Backup failed", str(exc))
+
+    def values(self) -> tuple[str, int, int]:
+        return (
+            self.template_edit.text().strip() or DEFAULT_TEMPLATE,
+            self.cover_size.value(),
+            self.quality.value(),
+        )

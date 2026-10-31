@@ -700,11 +700,21 @@ def read_metadata(path: str | Path) -> TrackMetadata:
 
     raw_tags: dict[str, list[str]] = {}
     if audio.tags is not None:
-        for key in audio.tags:
-            try:
-                raw_tags[str(key)] = _values(audio.tags.get(key))
-            except Exception:
-                raw_tags[str(key)] = []
+        if isinstance(audio.tags, ID3):
+            for frame_id in audio.tags:
+                values: list[str] = []
+                for frame in audio.tags.getall(frame_id):
+                    text = getattr(frame, "text", None)
+                    if text is not None:
+                        values.extend(_clean(item) for item in text if _clean(item))
+                    elif getattr(frame, "data", None):
+                        values.append(f"<{len(frame.data)} bytes>")
+                    else:
+                        values.append(str(frame))
+                raw_tags[str(frame_id)] = values
+        else:
+            for key, value in audio.tags.items():
+                raw_tags[str(key)] = _values(value)
 
     return TrackMetadata(
         path=path_value,

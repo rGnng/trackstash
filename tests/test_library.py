@@ -173,3 +173,38 @@ def test_import_move_and_undo(service: LibraryService, tmp_path: Path, audio_fac
     assert undone is not None and undone.undone == 1
     assert source.exists()
     assert service.db.track_count(library.id) == 0
+
+
+def test_duplicate_import_skip_by_hash(
+    service: LibraryService, tmp_path: Path, audio_factory: Path
+) -> None:
+    root = tmp_path / "HashLibrary"
+    root.mkdir()
+    library = service.db.add_library(root, name="Hash")
+    first = tmp_path / "First"
+    first.mkdir()
+    source = first / "one.flac"
+    shutil.copy2(audio_factory / "sample.flac", source)
+    write_tags(
+        source,
+        {
+            "title": "Duplicate",
+            "artists": ["Hash Artist"],
+            "album": "Hash Album",
+            "album_artist": "Hash Artist",
+        },
+    )
+    first_plan = service.plan_import([first], library.id)
+    first_result = service.execute_import(first_plan)
+    assert len(first_result.imported) == 1
+
+    second = tmp_path / "Second"
+    second.mkdir()
+    duplicate = second / "two.flac"
+    shutil.copy2(source, duplicate)
+    plan = service.plan_import([second], library.id, duplicate_policy="skip")
+    assert plan.items[0].action == "skip"
+    assert plan.items[0].duplicate_of == first_result.imported[0].id
+    result = service.execute_import(plan)
+    assert result.imported == []
+    assert service.db.track_count(library.id) == 1

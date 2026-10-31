@@ -29,6 +29,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      - name: Install audio test tools
+        run: brew install ffmpeg
+
       - name: Format check
         run: uv run ruff format --check .
 

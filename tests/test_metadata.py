@@ -92,3 +92,27 @@ def test_supported_extensions_include_target_formats() -> None:
     extensions = supported_extensions()
     for extension in (".flac", ".mp3", ".m4a", ".ogg", ".opus", ".ape", ".wv"):
         assert extension in extensions
+
+
+def test_unknown_tags_survive_known_edits(audio_factory: Path) -> None:
+    import mutagen
+    from mutagen.flac import FLAC
+    from mutagen.id3 import TXXX
+
+    flac_path = audio_factory / "sample.flac"
+    flac = mutagen.File(flac_path, easy=False)
+    assert isinstance(flac, FLAC)
+    flac.tags["CUSTOMFIELD"] = ["keep me"]
+    flac.save()
+    write_tags(flac_path, {"title": "Known Edit"})
+    reread = read_metadata(flac_path)
+    assert reread.raw_tags.get("customfield") == ["keep me"]
+
+    mp3_path = audio_factory / "sample.mp3"
+    mp3 = mutagen.File(mp3_path, easy=False)
+    assert mp3 is not None and mp3.tags is not None
+    mp3.tags.add(TXXX(encoding=3, desc="CustomField", text=["keep me"]))
+    mp3.save(v2_version=4)
+    write_tags(mp3_path, {"title": "Known Edit"})
+    reread = read_metadata(mp3_path)
+    assert reread.raw_tags.get("TXXX:CustomField") == ["keep me"]

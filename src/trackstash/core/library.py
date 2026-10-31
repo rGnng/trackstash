@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,14 +19,21 @@ from send2trash import send2trash
 
 from trackstash.core.artwork import write_album_cover
 from trackstash.core.db import Database, Library, Track
-from trackstash.core.identity import canonical_path, relative_path, song_uuid
+from trackstash.core.identity import (
+    canonical_path,
+    normalize_identifier,
+    relative_path,
+    song_uuid,
+)
 from trackstash.core.metadata import (
     TagSet,
     TrackMetadata,
     apply_tag_edits,
     read_metadata,
+    remove_artwork,
     supported_extensions,
     tagset_to_dict,
+    write_artwork,
     write_tags,
 )
 from trackstash.core.template import (
@@ -158,6 +166,16 @@ class UndoResult:
     errors: list[str]
 
 
+@dataclass(slots=True)
+class RekeyResult:
+    """Result of recomputing a library namespace and its song IDs."""
+
+    library_id: str
+    namespace: str
+    updated: int
+    backup: str
+
+
 def content_hash(path: str | Path, sample_size: int = 1024 * 1024) -> str:
     """Return a stable file hash using size plus head and tail samples."""
     value = Path(path)
@@ -208,6 +226,8 @@ class LibraryService:
         *,
         artwork_dir: str | Path | None = None,
         default_template: str = DEFAULT_TEMPLATE,
+        cover_size: int = 500,
+        cover_quality: int = 80,
     ) -> None:
         self.db = db
         self.artwork_dir = Path(
@@ -215,6 +235,8 @@ class LibraryService:
         )
         self.artwork_dir.mkdir(parents=True, exist_ok=True)
         self.default_template = default_template
+        self.cover_size = cover_size
+        self.cover_quality = cover_quality
 
     # ------------------------------------------------------------------
     # Import
@@ -386,6 +408,7 @@ class LibraryService:
                 continue
             destination = item.destination
             replaced: Track | None = None
+            file_written = False
             try:
                 if item.action == "replace" and item.replace_track_id:
                     replaced = self.db.get_track(item.replace_track_id)
@@ -400,6 +423,7 @@ class LibraryService:
                     else:
                         self._safe_move(item.source, destination)
                         moved += 1
+                    file_written = True
                 if item.edits:
                     write_tags(destination, item.edits)
                 metadata = read_metadata(destination)
@@ -420,6 +444,7 @@ class LibraryService:
                         "in_place": item.in_place,
                         "action": item.action,
                         "replaced_track_id": item.replace_track_id,
+                        "library_id": library.id,
                         "tags": tagset_to_dict(item.tags),
                     },
                     result={"track_id": track.id, "path": track.path},
@@ -434,9 +459,12 @@ class LibraryService:
                     prior={"source": str(item.source), "mode": plan.mode},
                     error=str(exc),
                 )
-                if destination.exists() and not item.in_place and plan.mode == "copy":
+                if file_written and not item.in_place:
                     try:
-                        destination.unlink()
+                        if plan.mode == "copy":
+                            destination.unlink()
+                        elif plan.mode == "move" and not item.source.exists():
+                            self._safe_move(destination, item.source)
                     except OSError:
                         pass
         self.db.finish_operation(operation_id)
@@ -483,7 +511,13 @@ class LibraryService:
 
     def _cache_cover(self, metadata: TrackMetadata, track: Track) -> None:
         artwork = metadata.artwork[0] if metadata.artwork else None
-        path = write_album_cover(artwork, track.album_id, self.artwork_dir)
+        path = write_album_cover(
+            artwork,
+            track.album_id,
+            self.artwork_dir,
+            size=self.cover_size,
+            quality=self.cover_quality,
+        )
         if path is not None:
             self.db.set_artwork_cache(track.id, str(path))
 
@@ -534,6 +568,28 @@ class LibraryService:
                     errors.append(f"{path}: {exc}")
                 if progress:
                     progress("Reading metadata", index, len(pending), str(path))
+        missing = [path for path in known if path not in discovered]
+        missing_set = set(missing)
+        known_by_id = {value[0]: path for path, value in known.items()}
+        known_hashes = self.db.hash_map(library.id)
+        moved_old_paths: set[str] = set()
+        for metadata in metadata_list:
+            try:
+                digest = content_hash(metadata.path)
+            except OSError:
+                digest = ""
+            old_id = known_hashes.get(digest) if digest else None
+            old_path = known_by_id.get(old_id or "")
+            if old_id and old_path in missing_set:
+                rel = relative_path(metadata.path, library.path)
+                if rel is not None:
+                    new_id = song_uuid(library.id_namespace, rel)
+                    try:
+                        self.db.move_song(old_id, metadata.path, new_id)
+                        moved_old_paths.add(old_path)
+                    except Exception as exc:
+                        errors.append(f"{metadata.path}: {exc}")
+        missing = [path for path in missing if path not in moved_old_paths]
         if progress:
             progress("Updating database", 0, len(metadata_list), "")
         tracks = self.db.upsert_tracks(metadata_list, library)
@@ -547,10 +603,9 @@ class LibraryService:
                 pass
             if progress:
                 progress("Updating database", index, len(tracks), track.path)
-        missing = [path for path in known if path not in discovered]
         pruned = 0
         if prune and missing:
-            missing_ids = [known[path][0] for path in missing]
+            missing_ids = [known[path][0] for path in missing if path in known]
             pruned = self.db.delete_tracks(missing_ids)
         self.db.finish_operation(operation_id)
         return ScanResult(
@@ -816,6 +871,127 @@ class LibraryService:
         return self.db.delete_library_rows(library_id)
 
     # ------------------------------------------------------------------
+    # ReKey and artwork
+
+    def rekey_library(self, library_id: str) -> RekeyResult:
+        library = self.db.get_library(library_id)
+        if library is None:
+            raise ValueError("Library not found")
+        namespace = normalize_identifier(library.identifier)
+        if not namespace:
+            raise ValueError("Library identifier must not be empty")
+        tracks = self.db.list_tracks(library_id=library.id)
+        planned: list[tuple[Track, str]] = []
+        seen: set[str] = set()
+        for track in tracks:
+            rel = relative_path(track.path, library.path)
+            if rel is None:
+                raise ValueError(f"Track is outside the library root: {track.path}")
+            new_id = song_uuid(namespace, rel)
+            if new_id in seen:
+                raise ValueError("ReKey would create duplicate song IDs")
+            seen.add(new_id)
+            existing = self.db.get_track(new_id)
+            if existing is not None and existing.id != track.id:
+                raise ValueError("ReKey would collide with an existing track ID")
+            planned.append((track, new_id))
+        backup = Path(self.db.path).with_name(
+            f"{Path(self.db.path).stem}.rekey-backup-{int(time.time())}.sqlite"
+        )
+        self.db.backup(backup)
+        operation_id = self.db.create_operation(
+            "rekey", f"ReKey {library.name} to {namespace}", undoable=False
+        )
+        updated = 0
+        try:
+            for track, new_id in planned:
+                if new_id == track.id:
+                    continue
+                self.db.move_song(track.id, track.path, new_id)
+                self.db.add_operation_item(
+                    operation_id,
+                    song_id=new_id,
+                    path=track.path,
+                    prior={"old_id": track.id, "new_id": new_id},
+                    result={"namespace": namespace},
+                )
+                updated += 1
+            self.db.set_library_namespace(library.id, namespace)
+            self.db.finish_operation(operation_id)
+        except Exception:
+            self.db.finish_operation(operation_id, "failed")
+            raise
+        return RekeyResult(
+            library_id=library.id,
+            namespace=namespace,
+            updated=updated,
+            backup=str(backup),
+        )
+
+    def set_artwork(
+        self,
+        song_ids: Sequence[str],
+        data: bytes,
+        *,
+        mime: str = "",
+        progress: Progress | None = None,
+    ) -> list[str]:
+        errors: list[str] = []
+        total = len(song_ids)
+        for index, song_id in enumerate(song_ids, start=1):
+            try:
+                track = self.db.get_track(song_id)
+                if track is None:
+                    raise ValueError("Track not found")
+                write_artwork(track.path, data, mime=mime)
+                metadata = read_metadata(track.path)
+                library = self.db.get_library(track.library_id or "")
+                if library is None:
+                    raise ValueError("Library not found")
+                written = self.db.upsert_tracks([metadata], library)
+                if written:
+                    self._cache_cover(metadata, written[0])
+            except Exception as exc:
+                errors.append(f"{song_id}: {exc}")
+            if progress:
+                progress("Writing artwork", index, total, "")
+        return errors
+
+    def remove_artwork(self, song_ids: Sequence[str]) -> list[str]:
+        errors: list[str] = []
+        for song_id in song_ids:
+            try:
+                track = self.db.get_track(song_id)
+                if track is None:
+                    raise ValueError("Track not found")
+                remove_artwork(track.path)
+                metadata = read_metadata(track.path)
+                library = self.db.get_library(track.library_id or "")
+                if library is None:
+                    raise ValueError("Library not found")
+                self.db.upsert_tracks([metadata], library)
+            except Exception as exc:
+                errors.append(f"{song_id}: {exc}")
+        return errors
+
+    def extract_artwork(self, song_id: str, destination: str | Path) -> Path:
+        track = self.db.get_track(song_id)
+        if track is None:
+            raise ValueError("Track not found")
+        metadata = read_metadata(track.path)
+        if not metadata.artwork:
+            raise ValueError("Track has no embedded artwork")
+        artwork = metadata.artwork[0]
+        suffix = ".png" if artwork.mime == "image/png" else ".jpg"
+        path = Path(destination)
+        if path.is_dir():
+            path = path / f"{Path(track.path).stem}{suffix}"
+        elif not path.suffix:
+            path = path.with_suffix(suffix)
+        path.write_bytes(artwork.data)
+        return path
+
+    # ------------------------------------------------------------------
     # Undo
 
     def undo_last(self) -> UndoResult | None:
@@ -855,6 +1031,107 @@ class LibraryService:
                 errors=errors,
             )
 
+    def redo_last(self) -> UndoResult | None:
+        operation = self.db.latest_undone_operation()
+        if operation is None:
+            return None
+        items = self.db.get_operation_items(operation.id)
+        redone = 0
+        errors: list[str] = []
+        for item in items:
+            if item["error"]:
+                continue
+            prior = json.loads(item["prior_json"]) if item["prior_json"] else {}
+            result = json.loads(item["result_json"]) if item["result_json"] else {}
+            try:
+                if operation.kind == "tags":
+                    redone += self._redo_tag_item(prior, result, errors)
+                elif operation.kind == "organize":
+                    redone += self._redo_organize_item(prior, errors)
+                elif operation.kind == "import":
+                    redone += self._redo_import_item(prior, result, errors)
+                else:
+                    errors.append(f"Redo is not supported for {operation.kind} operations")
+            except Exception as exc:
+                errors.append(str(exc))
+        self.db.mark_operation_undone(operation.id, False)
+        return UndoResult(
+            operation_id=operation.id,
+            kind=operation.kind,
+            undone=redone,
+            errors=errors,
+        )
+
+    def _redo_tag_item(
+        self, prior: dict[str, Any], result: dict[str, Any], errors: list[str]
+    ) -> int:
+        path_value = str(prior.get("path", ""))
+        tags_data = result.get("tags") or {}
+        if not path_value or not tags_data or not Path(path_value).exists():
+            errors.append(f"{path_value}: file is missing")
+            return 0
+        try:
+            edits = dict(tags_data)
+            edits.pop("custom", None)
+            write_tags(path_value, edits)
+            metadata = read_metadata(path_value)
+            library_id = prior.get("library_id")
+            library = self.db.get_library(library_id) if library_id else None
+            if library is None:
+                track = self.db.get_track_by_path(path_value)
+                library = self.db.get_library(track.library_id or "") if track else None
+            if library is None:
+                return 0
+            self.db.upsert_tracks([metadata], library)
+            return 1
+        except Exception as exc:
+            errors.append(f"{path_value}: {exc}")
+            return 0
+
+    def _redo_organize_item(self, prior: dict[str, Any], errors: list[str]) -> int:
+        old_path = Path(str(prior.get("old_path", "")))
+        new_path = Path(str(prior.get("new_path", "")))
+        if not old_path.exists() or new_path.exists():
+            errors.append(f"{old_path}: cannot redo move")
+            return 0
+        try:
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_path), str(new_path))
+            self.db.move_song(str(prior["old_id"]), str(new_path), str(prior["new_id"]))
+            return 1
+        except Exception as exc:
+            errors.append(f"{old_path}: {exc}")
+            return 0
+
+    def _redo_import_item(
+        self, prior: dict[str, Any], result: dict[str, Any], errors: list[str]
+    ) -> int:
+        if prior.get("in_place"):
+            return 0
+        source = Path(str(prior.get("source", "")))
+        destination = Path(str(prior.get("destination", "")))
+        if not source.exists():
+            errors.append(f"{source}: source no longer exists")
+            return 0
+        try:
+            if destination.exists():
+                errors.append(f"{destination}: destination already exists")
+                return 0
+            self._atomic_copy(source, destination)
+            metadata = read_metadata(destination)
+            library_id = prior.get("library_id")
+            library = self.db.get_library(library_id) if library_id else None
+            if library is None:
+                track = self.db.get_track(str(result.get("track_id", "")))
+                library = self.db.get_library(track.library_id or "") if track else None
+            if library is None:
+                return 0
+            self.db.upsert_tracks([metadata], library)
+            return 1
+        except Exception as exc:
+            errors.append(f"{source}: {exc}")
+            return 0
+
     def _undo_import_item(
         self, prior: dict[str, Any], result: dict[str, Any], errors: list[str]
     ) -> int:
@@ -878,6 +1155,11 @@ class LibraryService:
                 edits.pop("custom", None)
                 if destination.exists():
                     write_tags(destination, edits)
+                    metadata = read_metadata(destination)
+                    library_id = prior.get("library_id")
+                    library = self.db.get_library(library_id) if library_id else None
+                    if library is not None:
+                        self.db.upsert_tracks([metadata], library)
             return 1
         except Exception as exc:
             errors.append(f"{destination}: {exc}")
