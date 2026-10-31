@@ -16,7 +16,7 @@
 | M2 | Complete | Managed import, quick/full scan, move detection, missing-file handling, search |
 | M3 | Complete | Qt library browser with single-library selector, Tracks and Albums grid views, detail panel, import wizard |
 | M4 | Complete | Single/batch tag editor, auto-numbering, previews, verified writes, artwork, journal, undo/redo |
-| M5 | Complete | Template organization, UUID remapping, duplicate review, index/Trash deletion |
+| M5 | Complete | Template organization, library relocation, UUID remapping, duplicate review, index/Trash deletion |
 | M6 | Complete | Backup/restore, settings, ReKey, PyInstaller app bundle, ad-hoc signed DMG |
 
 ## Verified behavior
@@ -38,7 +38,7 @@
 Test status at the time of writing:
 
 ```text
-51 passed, 2 skipped (default suite)
+52 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 
@@ -60,8 +60,8 @@ ID certificate, hardened runtime, notarization, and stapling.
 
 These are documented rather than silently omitted:
 
-- Filesystem watching, library relocation, saved views, tag presets, automatic
-  organization, batch transforms, and auto-numbering are not exposed in the UI.
+- Filesystem watching, saved views, tag presets, automatic organization, and
+  batch transforms are not exposed in the UI.
 - Redo covers tag edits, moves, and copy imports; system-Trash deletion is
   irreversible, and redo of move-imports is not supported.
 - Artwork supports front-cover embedding/replacement/removal; multiple artwork

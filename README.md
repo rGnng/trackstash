@@ -131,8 +131,8 @@ packaging/macos/         PyInstaller spec and DMG build script
 
 - No online metadata lookup, audio playback, or preview.
 - Playlist import is planned after M0 and is not implemented.
-- Filesystem watching, library relocation, saved views, tag presets, and
-  automatic organization are not yet exposed in the UI.
+- Filesystem watching, saved views, tag presets, and automatic organization
+  are not yet exposed in the UI.
 - Redo is supported for tag edits, moves, and copy imports; system-Trash file
   deletion remains irreversible.
 - The release DMG is ad-hoc signed, not notarized.

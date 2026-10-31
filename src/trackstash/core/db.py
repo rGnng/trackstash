@@ -469,6 +469,50 @@ class Database:
                 (namespace, library_id),
             )
 
+    def relocate_library(self, library_id: str, new_root: str | Path) -> Library:
+        """Re-root a library, preserving song IDs and relative paths."""
+        library = self.get_library(library_id)
+        if library is None:
+            raise ValueError("Library not found")
+        new_path = canonical_path(str(new_root))
+        if not Path(new_path).is_dir():
+            raise ValueError("New library folder does not exist")
+        old_path = canonical_path(library.path)
+        if new_path == old_path:
+            return library
+        for other in self.list_libraries():
+            if other.id == library_id:
+                continue
+            if is_under(new_path, other.path) or is_under(other.path, new_path):
+                raise ValueError("New library folder overlaps another library")
+        if is_under(new_path, old_path) or is_under(old_path, new_path):
+            raise ValueError("The new root must not be nested inside the old root")
+        new_library_id = library_uuid(new_path)
+        if self.get_library(new_library_id) is not None:
+            raise ValueError("The new library identity already exists")
+        with self.transaction() as connection:
+            rows = connection.execute(
+                "SELECT id, path FROM songs WHERE library_id = ?", (library_id,)
+            ).fetchall()
+            for row in rows:
+                old_song_path = str(row["path"])
+                if not is_under(old_song_path, old_path):
+                    raise ValueError(f"Track is outside the old root: {old_song_path}")
+                suffix = old_song_path[len(old_path) :]
+                new_song_path = new_path + suffix
+                connection.execute(
+                    "UPDATE songs SET library_id = ?, path = ? WHERE id = ?",
+                    (new_library_id, new_song_path, row["id"]),
+                )
+            connection.execute(
+                "UPDATE libraries SET id = ?, path = ? WHERE id = ?",
+                (new_library_id, new_path, library_id),
+            )
+        result = self.get_library(new_library_id)
+        if result is None:
+            raise RuntimeError("Library disappeared after relocation")
+        return result
+
     def rename_library(
         self,
         library_id: str,

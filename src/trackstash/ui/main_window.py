@@ -454,6 +454,7 @@ class MainWindow(QMainWindow):
             return
         menu = QMenu(self)
         rename = menu.addAction("Rename / Change Identifier…")
+        relocate = menu.addAction("Change Location…")
         rekey = menu.addAction("ReKey IDs…")
         toggle = menu.addAction("Disable Library" if library.enabled else "Enable Library")
         menu.addSeparator()
@@ -478,6 +479,29 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 QMessageBox.critical(self, "Rename failed", str(exc))
             self.refresh_libraries()
+        elif chosen == relocate:
+            folder = QFileDialog.getExistingDirectory(
+                self, "Choose the New Library Folder", str(Path(library.path).parent)
+            )
+            if not folder:
+                return
+            answer = QMessageBox.question(
+                self,
+                "Change Library Location",
+                f"Re-root “{library.name}” at:\n{folder}\n\n"
+                "Move the files there first. Their relative paths and song IDs "
+                "must stay the same. A database backup is written before the change.",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                updated = self.service.relocate_library(library.id, folder)
+            except Exception as exc:
+                QMessageBox.critical(self, "Relocate failed", str(exc))
+                return
+            self._current_library_id = updated.id
+            self.refresh_libraries()
+            QMessageBox.information(self, "Library relocated", f"Now rooted at {updated.path}")
         elif chosen == rekey:
             answer = QMessageBox.question(
                 self,

@@ -1061,6 +1061,14 @@ class LibraryService:
             backup=str(backup),
         )
 
+    def relocate_library(self, library_id: str, new_root: str | Path) -> Library:
+        """Re-root a library after its folder has been moved, with a backup."""
+        backup = Path(self.db.path).with_name(
+            f"{Path(self.db.path).stem}.relocate-backup-{int(time.time())}.sqlite"
+        )
+        self.db.backup(backup)
+        return self.db.relocate_library(library_id, new_root)
+
     def set_artwork(
         self,
         song_ids: Sequence[str],

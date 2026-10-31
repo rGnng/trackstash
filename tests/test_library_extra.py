@@ -200,3 +200,19 @@ def test_auto_number_per_disc_and_undo(setup: tuple, tmp_path: Path, audio_facto
         (track.disc, track.track) for track in service.db.list_tracks(library_id=library.id)
     )
     assert restored == [(1, 7), (1, 8), (2, 7), (2, 8)]
+
+
+def test_relocate_library_preserves_track_ids(setup: tuple, tmp_path: Path) -> None:
+    database, service, library = setup
+    track = database.list_tracks(library_id=library.id)[0]
+    old_root = Path(library.path)
+    new_root = tmp_path / "Relocated Library"
+    shutil.move(str(old_root), str(new_root))
+    relocated = service.relocate_library(library.id, new_root)
+    assert relocated.id != library.id
+    assert Path(relocated.path) == new_root.resolve()
+    moved = database.get_track(track.id)
+    assert moved is not None
+    assert Path(moved.path).exists()
+    assert moved.library_id == relocated.id
+    assert database.get_library(library.id) is None
