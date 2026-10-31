@@ -751,7 +751,7 @@ class MainWindow(QMainWindow):
             if index % 25 == 0:
                 self.statusBar().showMessage(f"Hashing tracks… {index}/{len(tracks)}")
                 QApplication.processEvents()
-        exact = self.db.exact_duplicate_groups()
+        exact = self.service.exact_duplicates()
         probable = self.db.probable_duplicate_groups()
         if not exact and not probable:
             QMessageBox.information(self, "Duplicates", "No duplicate groups were found.")

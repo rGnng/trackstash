@@ -177,7 +177,7 @@ class RekeyResult:
 
 
 def content_hash(path: str | Path, sample_size: int = 1024 * 1024) -> str:
-    """Return a stable file hash using size plus head and tail samples."""
+    """Return a fast fingerprint using size plus head and tail samples."""
     value = Path(path)
     stat = value.stat()
     digest = hashlib.sha256()
@@ -187,6 +187,15 @@ def content_hash(path: str | Path, sample_size: int = 1024 * 1024) -> str:
         if stat.st_size > sample_size * 2:
             handle.seek(-sample_size, os.SEEK_END)
             digest.update(handle.read(sample_size))
+    return digest.hexdigest()
+
+
+def full_content_hash(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
+    """Return the full SHA-256 digest of a file for duplicate confirmation."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            digest.update(chunk)
     return digest.hexdigest()
 
 
@@ -869,6 +878,24 @@ class LibraryService:
 
     def delete_library(self, library_id: str) -> int:
         return self.db.delete_library_rows(library_id)
+
+    # ------------------------------------------------------------------
+    # Duplicates
+
+    def exact_duplicates(self) -> list[list[Track]]:
+        """Return duplicate groups confirmed by a full content hash."""
+        groups = self.db.exact_duplicate_groups()
+        confirmed: list[list[Track]] = []
+        for group in groups:
+            by_hash: dict[str, list[Track]] = {}
+            for track in group:
+                try:
+                    digest = full_content_hash(track.path)
+                except OSError:
+                    continue
+                by_hash.setdefault(digest, []).append(track)
+            confirmed.extend(items for items in by_hash.values() if len(items) > 1)
+        return confirmed
 
     # ------------------------------------------------------------------
     # ReKey and artwork

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import platformdirs
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from trackstash import __version__
 from trackstash.core.db import Database
@@ -83,8 +83,15 @@ def run(argv: Sequence[str] | None = None) -> int:
     database = Database(args.database)
     if not args.no_default_library and not database.list_libraries():
         root = args.library_root.expanduser()
-        root.mkdir(parents=True, exist_ok=True)
-        database.add_library(root)
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            database.add_library(root)
+        except Exception as exc:
+            QMessageBox.warning(
+                None,
+                "Default library",
+                f"Could not create the default library at {root}:\n{exc}",
+            )
 
     window = MainWindow(database)
     window.show()

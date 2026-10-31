@@ -145,3 +145,18 @@ def test_rekey_changes_song_ids_and_backs_up(setup: tuple) -> None:
     updated = database.list_tracks(library_id=library.id)[0]
     assert updated.id != track.id
     assert updated.path == track.path
+
+
+def test_exact_duplicates_confirmed_by_full_hash(
+    setup: tuple, tmp_path: Path, audio_factory: Path
+) -> None:
+    database, service, library = setup
+    source = Path(database.list_tracks(library_id=library.id)[0].path)
+    incoming = tmp_path / "Duplicate Incoming"
+    incoming.mkdir()
+    shutil.copy2(source, incoming / "duplicate.flac")
+    plan = service.plan_import([incoming], library.id, duplicate_policy="keep")
+    result = service.execute_import(plan)
+    assert len(result.imported) == 1
+    groups = service.exact_duplicates()
+    assert any(len(group) == 2 for group in groups)
