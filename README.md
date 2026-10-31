@@ -5,6 +5,8 @@ music collections. It imports audio into a managed library, edits embedded tags
 safely at scale, organizes files by metadata, and keeps the library index
 consistent without cloud dependencies.
 
+![TrackStash library browser](docs/screenshot.png)
+
 > **Status:** M6 implementation. Core managed-library, import, tag editing,
 > artwork, organization, duplicate review, deletion, and undo workflows are
 > implemented. The app is not yet notarized for public distribution.
