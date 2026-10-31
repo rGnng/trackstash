@@ -68,4 +68,4 @@ These are documented rather than silently omitted:
   types and sidecar policies are not exposed.
 - No online metadata lookup, playback/preview, or playlist import.
 - Only an arm64 build is produced; universal2 is a follow-up.
-- CI is configured but has not been run on a remote runner from this workspace.
+- GitHub Actions CI is configured and has passed for the M6 commits.

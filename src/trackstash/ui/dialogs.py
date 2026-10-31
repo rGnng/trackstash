@@ -257,6 +257,7 @@ class ImportDialog(QDialog):
         source_row = QHBoxLayout()
         self.source_edit = QLineEdit(self)
         self.source_edit.setPlaceholderText("Folder or files to import")
+        self.source_edit.textEdited.connect(self._source_edited)
         browse = QPushButton("Folder…", self)
         browse.clicked.connect(self._browse)
         browse_files = QPushButton("Files…", self)
@@ -279,18 +280,21 @@ class ImportDialog(QDialog):
         self.mode_combo = QComboBox(self)
         self.mode_combo.addItem("Copy (recommended)", "copy")
         self.mode_combo.addItem("Move", "move")
+        self.mode_combo.currentIndexChanged.connect(self._invalidate_plan)
         options.addWidget(self.mode_combo)
         options.addWidget(QLabel("Duplicates", self))
         self.duplicate_combo = QComboBox(self)
         self.duplicate_combo.addItem("Skip", "skip")
         self.duplicate_combo.addItem("Keep both", "keep")
         self.duplicate_combo.addItem("Replace", "replace")
+        self.duplicate_combo.currentIndexChanged.connect(self._invalidate_plan)
         options.addWidget(self.duplicate_combo)
         layout.addLayout(options)
 
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel("Destination template", self))
         self.template_edit = QLineEdit(DEFAULT_TEMPLATE, self)
+        self.template_edit.textEdited.connect(self._invalidate_plan)
         template_row.addWidget(self.template_edit, 1)
         overrides = QPushButton("Tag overrides…", self)
         overrides.clicked.connect(self._edit_overrides)
@@ -325,6 +329,15 @@ class ImportDialog(QDialog):
         if folder:
             self._sources = [folder]
             self.source_edit.setText(folder)
+
+    def _source_edited(self, _text: str) -> None:
+        self._sources = []
+        self._invalidate_plan()
+
+    def _invalidate_plan(self, *_args: object) -> None:
+        self.plan = None
+        if hasattr(self, "import_button"):
+            self.import_button.setEnabled(False)
 
     def _browse_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
