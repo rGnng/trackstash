@@ -548,8 +548,9 @@ Unsupported files are never modified.
 - **Right pane:** virtualized track table or album grid with search and filters.
 - **Media editor (left):** artwork, editable canonical tags, technical properties,
   and a fixed Save/Revert row.
-- **Bottom action bar:** the Import button. Scans, adding libraries, relocation,
-  and ReKey live in the Library Manager window.
+- **Import:** a File → Import… action. Scans, adding libraries, relocation, and
+  ReKey live in the Library Manager window.
+- **Albums view:** multi-select with drag or ⌘-click for batch tag editing.
 - **Import wizard:** source picker, tag preview/edit, copy or move mode, destination
   template preview, collision and duplicate handling, per-file progress, and undo.
 - **Batch editor:** tri-state fields, mixed-value indicators, transform actions,

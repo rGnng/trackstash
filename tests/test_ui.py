@@ -167,7 +167,8 @@ def test_inline_editor_and_column_persistence(
     window.table.selectRow(0)
     assert window.editor.lines["title"].text() == "UI Song"
     assert window.editor.edits()["title"] == "UI Song"
-    assert window.import_button.text() == "Import…"
+    assert window.import_action.text() == "Import…"
+    assert not hasattr(window, "import_button")
 
     from trackstash.ui.models import COLUMNS
 
@@ -248,3 +249,34 @@ def test_inline_save_and_table_sorting(
 
     window.table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
     assert window.model.rowCount() >= 1
+
+
+def test_album_multi_selection(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
+    from PySide6.QtWidgets import QAbstractItemView
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    extra = tmp_path / "Extra"
+    extra.mkdir()
+    source = extra / "second.flac"
+    shutil.copy2(audio_factory / "sample.flac", source)
+    write_tags(
+        source,
+        {
+            "title": "Second UI Song",
+            "artists": ["UI Artist"],
+            "album": "UI Album",
+            "album_artist": "UI Artist",
+        },
+    )
+    service.execute_import(service.plan_import([extra], library.id))
+    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.tabs.setCurrentIndex(1)
+    assert window.album_view.selectionMode() == QAbstractItemView.SelectionMode.ExtendedSelection
+    window.album_view.selectAll()
+    ids = window.selected_track_ids()
+    assert len(ids) == 2
+    assert window.editor.artwork_info.text()

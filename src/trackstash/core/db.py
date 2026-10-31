@@ -965,6 +965,18 @@ class Database:
             rows = connection.execute(sql, parameters).fetchall()
         return [_row_to_track(row) for row in rows]
 
+    def track_ids_for_album(self, album_id: str, library_id: str | None = None) -> list[str]:
+        """Return ordered track IDs for an album."""
+        sql = "SELECT id FROM songs WHERE album_id = ?"
+        parameters: list[Any] = [album_id]
+        if library_id:
+            sql += " AND library_id = ?"
+            parameters.append(library_id)
+        sql += " ORDER BY disc, track, title COLLATE NOCASE"
+        with self.connect() as connection:
+            rows = connection.execute(sql, parameters).fetchall()
+        return [str(row["id"]) for row in rows]
+
     def get_track(self, song_id: str) -> Track | None:
         with self.connect() as connection:
             row = connection.execute(self._TRACK_SELECT + " WHERE s.id = ?", (song_id,)).fetchone()

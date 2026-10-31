@@ -16,10 +16,11 @@ consistent without cloud dependencies.
 - **Managed library.** One current library at a time, selected from a native
   dropdown. A Library Manager window handles adding, Quick/Full Scan, relocation,
   ReKey, enable/disable, and index removal. Imports copy by default or move on
-  request from the bottom Import button, with a tag-driven destination template.
+  request from File → Import…, with a tag-driven destination template.
 - **Tracks and Albums views.** A sortable track table with movable/resizable
   columns (`Title`, `Format`, `Codec`, `Bitrate` in Kbps, and more) and a
-  virtualized album grid with cover art. Double-click an album to filter tracks.
+  virtualized album grid with cover art. Double-click an album to filter tracks;
+  select multiple albums for batch editing.
 - **Configurable columns.** Right-click the track header to show or hide columns;
   order, width, and visibility persist and are also editable in Settings.
 - **Tracks-compatible UUIDs.** Library, artist, album, and song IDs use the same

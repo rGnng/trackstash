@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, QPoint, QSize, Qt, QUrl
+from PySide6.QtCore import QItemSelectionModel, QModelIndex, QPoint, QSize, Qt, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -107,6 +107,10 @@ class MainWindow(QMainWindow):
     # Actions and menus
 
     def _create_actions(self) -> None:
+        self.import_action = QAction("Import…", self)
+        self.import_action.setShortcut(QKeySequence("Ctrl+I"))
+        self.import_action.triggered.connect(self.import_files)
+
         self.close_action = QAction("Close Window", self)
         self.close_action.setShortcut(QKeySequence.StandardKey.Close)
         self.close_action.triggered.connect(self.close)
@@ -183,6 +187,8 @@ class MainWindow(QMainWindow):
         menu_bar.setNativeMenuBar(True)
 
         file_menu = menu_bar.addMenu("&File")
+        file_menu.addAction(self.import_action)
+        file_menu.addSeparator()
         file_menu.addAction(self.close_action)
         file_menu.addSeparator()
         file_menu.addAction(self.quit_action)
@@ -226,18 +232,6 @@ class MainWindow(QMainWindow):
         outer_layout = QVBoxLayout(outer)
         outer_layout.setContentsMargins(8, 8, 8, 8)
 
-        library_row = QHBoxLayout()
-        library_row.addWidget(QLabel("Library", outer))
-        self.library_combo = QComboBox(outer)
-        self.library_combo.setMinimumWidth(320)
-        self.library_combo.currentIndexChanged.connect(self._library_changed)
-        library_row.addWidget(self.library_combo)
-        manage = QPushButton("Library Manager…", outer)
-        manage.clicked.connect(self.open_library_manager)
-        library_row.addWidget(manage)
-        library_row.addStretch(1)
-        outer_layout.addLayout(library_row)
-
         splitter = QSplitter(Qt.Orientation.Horizontal, outer)
         self.editor = TrackInfoEditor(splitter)
         self.editor.save_requested.connect(self.save_inline_edits)
@@ -250,22 +244,32 @@ class MainWindow(QMainWindow):
         right = QWidget(splitter)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(8, 0, 0, 0)
-        search_row = QHBoxLayout()
+
+        library_row = QHBoxLayout()
+        library_row.addWidget(QLabel("Library", right))
+        self.library_combo = QComboBox(right)
+        self.library_combo.setMinimumWidth(150)
+        self.library_combo.setMaximumWidth(220)
+        self.library_combo.currentIndexChanged.connect(self._library_changed)
+        library_row.addWidget(self.library_combo)
+        manage = QPushButton("Manage…", right)
+        manage.clicked.connect(self.open_library_manager)
+        library_row.addWidget(manage)
         self.search_edit = QLineEdit(right)
         self.search_edit.setPlaceholderText("Search title, artist, album, genre, path…")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self.refresh_tracks)
+        library_row.addWidget(self.search_edit, 1)
         self.format_filter = QComboBox(right)
         self.format_filter.addItem("All formats", "")
         for extension in ("FLAC", "MP3", "M4A", "OGG", "OPUS", "APE", "WV", "WAV", "AIFF"):
             self.format_filter.addItem(extension, extension)
         self.format_filter.currentIndexChanged.connect(self.refresh_tracks)
+        library_row.addWidget(self.format_filter)
         self.missing_artwork = QCheckBox("Missing artwork", right)
         self.missing_artwork.stateChanged.connect(self.refresh_tracks)
-        search_row.addWidget(self.search_edit, 1)
-        search_row.addWidget(self.format_filter)
-        search_row.addWidget(self.missing_artwork)
-        right_layout.addLayout(search_row)
+        library_row.addWidget(self.missing_artwork)
+        right_layout.addLayout(library_row)
 
         self.tabs = QTabWidget(right)
         self.tabs.currentChanged.connect(self._tab_changed)
@@ -320,8 +324,13 @@ class MainWindow(QMainWindow):
         self.album_view.setIconSize(QSize(180, 180))
         self.album_view.setGridSize(QSize(220, 260))
         self.album_view.setSpacing(8)
-        self.album_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.album_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.album_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.album_view.setSelectionRectVisible(True)
+        self.album_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.album_view.customContextMenuRequested.connect(self._album_context_menu)
         self.album_view.doubleClicked.connect(self._album_activated)
+        self.album_view.selectionModel().selectionChanged.connect(self._selection_changed)
         albums_layout.addWidget(self.album_view, 1)
         self.tabs.addTab(albums_tab, "Albums")
         right_layout.addWidget(self.tabs, 1)
@@ -332,12 +341,6 @@ class MainWindow(QMainWindow):
         splitter.setSizes([390, 1010])
         outer_layout.addWidget(splitter, 1)
 
-        bottom = QHBoxLayout()
-        bottom.addStretch(1)
-        self.import_button = QPushButton("Import…", outer)
-        self.import_button.clicked.connect(self.import_files)
-        bottom.addWidget(self.import_button)
-        outer_layout.addLayout(bottom)
         self.setCentralWidget(outer)
 
         self._load_column_config()
@@ -440,6 +443,33 @@ class MainWindow(QMainWindow):
             self.albums_view_action.setChecked(index == 1)
         if index == 1:
             self.refresh_albums()
+        self._selection_changed()
+
+    def _album_context_menu(self, position: QPoint) -> None:
+        index = self.album_view.indexAt(position)
+        if not index.isValid():
+            return
+        selection = self.album_view.selectionModel()
+        if not selection.isSelected(index):
+            self.album_view.setCurrentIndex(index)
+            selection.select(
+                index,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect,
+            )
+        menu = QMenu(self)
+        edit = menu.addAction("Edit Tags for Selected Albums…")
+        auto = menu.addAction("Auto-number Tracks…")
+        organize = menu.addAction("Organize…")
+        delete = menu.addAction("Delete…")
+        chosen = menu.exec(self.album_view.viewport().mapToGlobal(position))
+        if chosen == edit:
+            self.edit_tags()
+        elif chosen == auto:
+            self.auto_number_tracks()
+        elif chosen == organize:
+            self.organize()
+        elif chosen == delete:
+            self.delete_tracks()
 
     def _album_activated(self, index: QModelIndex) -> None:
         album = self.album_model.album_at(index.row())
@@ -475,10 +505,20 @@ class MainWindow(QMainWindow):
     # Selection and inline editor
 
     def selected_track_ids(self) -> list[str]:
+        if hasattr(self, "tabs") and self.tabs.currentIndex() == 1 and hasattr(self, "album_view"):
+            selection = self.album_view.selectionModel()
+            if selection is None:
+                return []
+            ids: list[str] = []
+            for index in selection.selectedIndexes():
+                album = self.album_model.album_at(index.row())
+                if album is not None:
+                    ids.extend(self.db.track_ids_for_album(album.id, self._current_library_id))
+            return list(dict.fromkeys(ids))
         selection = self.table.selectionModel()
         if selection is None:
             return []
-        ids: list[str] = []
+        ids = []
         for index in selection.selectedRows():
             track = self.model.track_at(index.row())
             if track is not None:

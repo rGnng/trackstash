@@ -38,9 +38,6 @@ class TrackInfoEditor(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        self.heading = QLabel("Track Info", self)
-        self.heading.setStyleSheet("font-size: 15px; font-weight: 600;")
-        layout.addWidget(self.heading)
         self.save_button = QPushButton("Save Changes", self)
         self.save_button.clicked.connect(self._emit_save)
         self.revert_button = QPushButton("Revert", self)
@@ -155,7 +152,6 @@ class TrackInfoEditor(QWidget):
     def clear(self) -> None:
         self._track = None
         self._tags = None
-        self.heading.setText("Track Info")
         for line in self.lines.values():
             line.clear()
         for spin in self.spins.values():
@@ -163,13 +159,12 @@ class TrackInfoEditor(QWidget):
         self.compilation.setChecked(False)
         for label in self.technical.values():
             label.clear()
-        self.set_artwork(QPixmap(), "")
+        self.set_artwork(QPixmap(), "No track selected")
         self._set_fields_enabled(False)
 
     def set_multi(self, count: int) -> None:
         self._track = None
         self._tags = None
-        self.heading.setText(f"{count} tracks selected")
         for line in self.lines.values():
             line.clear()
         for spin in self.spins.values():
@@ -183,7 +178,6 @@ class TrackInfoEditor(QWidget):
     def load_track(self, track: Track, tags: TagSet) -> None:
         self._track = track
         self._tags = tags
-        self.heading.setText(track.title or "Untitled")
         self.lines["title"].setText(tags.title)
         self.lines["artists"].setText(", ".join(tags.artists))
         self.lines["album"].setText(tags.album)
