@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Build and packaging
+build/
+dist/
+*.spec
+artifacts/
+
+# Test and tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Application data
+data/
+logs/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.idea/
+.vscode/

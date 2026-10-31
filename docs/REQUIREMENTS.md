@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.6 — decisions resolved, pending final review |
+| **Status** | Approved for M0 — 2026-10-31 |
 | **Date** | 2026-10-31 |
 | **Product** | TrackStash |
 | **Document language** | English (project-wide convention) |
@@ -792,19 +792,19 @@ None. All decisions are resolved.
 
 ## 13. Review checklist
 
-- [ ] Decisions D-01 through D-21 are confirmed.
-- [ ] Section 2 goals and non-goals match the intended product.
-- [ ] Section 5 functional requirements are complete and correctly prioritized.
-- [ ] Section 5.11 import, update, and deletion semantics are correct.
-- [ ] Section 5.12 playlist import is correctly deferred until after M0 and excluded from the scaffold.
-- [ ] Section 7 canonical fields and Tracks-compatible identity rules are correct.
-- [ ] Section 8 format priorities match the actual collection.
-- [ ] Section 9 UX flows cover the daily workflows.
-- [ ] Section 10 architecture and repository layout are acceptable.
-- [ ] Section 11 milestones are ordered correctly.
-- [ ] Section 11.1 acceptance criteria are testable and complete.
-- [ ] Section 12.3 GPL compliance and source publication are understood and accepted.
-- [ ] No open decisions remain.
+- [x] Decisions D-01 through D-21 are confirmed.
+- [x] Section 2 goals and non-goals match the intended product.
+- [x] Section 5 functional requirements are complete and correctly prioritized.
+- [x] Section 5.11 import, update, and deletion semantics are correct.
+- [x] Section 5.12 playlist import is correctly deferred until after M0 and excluded from the scaffold.
+- [x] Section 7 canonical fields and Tracks-compatible identity rules are correct.
+- [x] Section 8 format priorities match the actual collection.
+- [x] Section 9 UX flows cover the daily workflows.
+- [x] Section 10 architecture and repository layout are acceptable.
+- [x] Section 11 milestones are ordered correctly.
+- [x] Section 11.1 acceptance criteria are testable and complete.
+- [x] Section 12.3 GPL compliance and source publication are understood and accepted.
+- [x] No open decisions remain.
 
 To review item by item, reply with the requirement IDs to change (for example,
 `TAG-07` or `NFR-01`) and the desired adjustment. A section or milestone can be
@@ -816,7 +816,7 @@ approved explicitly; unmentioned items remain unchanged.
 
 | | |
 |---|---|
-| **Requirements approved** | ☐ Yes  ☐ No — changes requested |
-| **Approved by** | |
-| **Date** | |
+| **Requirements approved** | ☑ Yes  ☐ No — changes requested |
+| **Approved by** | Project owner |
+| **Date** | 2026-10-31 |
 | **Next milestone** | M0 — repository scaffold and CI |

@@ -1,0 +1,80 @@
+[project]
+name = "trackstash"
+version = "0.1.0"
+description = "A local-first media library manager for tagging and organizing audio collections."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "TrackStash contributors" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: MacOS X",
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = [
+  "PySide6==6.11.3",
+  "mutagen>=1.47,<2",
+  "Pillow>=11,<14",
+  "watchdog>=6,<8",
+  "send2trash>=2,<3",
+  "platformdirs>=4,<5",
+]
+
+[project.scripts]
+trackstash = "trackstash.__main__:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<10",
+  "pytest-qt>=4.4,<5",
+  "ruff>=0.9,<1",
+  "mypy>=1.14,<2",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trackstash"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+mypy_path = "src"
+pretty = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["mutagen.*", "send2trash.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers"]
+qt_api = "pyside6"
+
+[tool.coverage.run]
+source = ["trackstash"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
