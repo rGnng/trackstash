@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import QItemSelectionModel, QModelIndex, QPoint, QSize, Qt, QUrl
+from PySide6.QtCore import (
+    QItemSelectionModel,
+    QModelIndex,
+    QPoint,
+    QProcess,
+    QSize,
+    Qt,
+    QUrl,
+)
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -230,10 +239,18 @@ class MainWindow(QMainWindow):
     def _create_central_widget(self) -> None:
         outer = QWidget(self)
         outer_layout = QVBoxLayout(outer)
-        outer_layout.setContentsMargins(8, 8, 8, 8)
+        outer_layout.setContentsMargins(4, 4, 4, 4)
+        outer_layout.setSpacing(4)
 
         splitter = QSplitter(Qt.Orientation.Horizontal, outer)
+        splitter.setHandleWidth(3)
+        splitter.setStyleSheet(
+            "QSplitter::handle { background-color: #1E2632; image: none; }"
+            "QSplitter::handle:hover { background-color: #48D1B5; }"
+        )
         self.editor = TrackInfoEditor(splitter)
+        self.editor.setMinimumWidth(340)
+        self.editor.setMaximumWidth(460)
         self.editor.save_requested.connect(self.save_inline_edits)
         self.editor.cover_requested.connect(self.set_cover)
         self.editor.remove_cover_requested.connect(self.remove_cover)
@@ -243,7 +260,8 @@ class MainWindow(QMainWindow):
 
         right = QWidget(splitter)
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(8, 0, 0, 0)
+        right_layout.setContentsMargins(4, 0, 0, 0)
+        right_layout.setSpacing(4)
 
         library_row = QHBoxLayout()
         library_row.addWidget(QLabel("Library", right))
@@ -306,6 +324,8 @@ class MainWindow(QMainWindow):
         header.sectionHandleDoubleClicked.connect(self._auto_fit_column)
         header.sectionDoubleClicked.connect(self._auto_fit_column)
         self.table.doubleClicked.connect(self.edit_tags)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._track_context_menu)
         self.table.selectionModel().selectionChanged.connect(self._selection_changed)
         tracks_layout.addWidget(self.table, 1)
         self.tabs.addTab(tracks_tab, "Tracks")
@@ -338,7 +358,7 @@ class MainWindow(QMainWindow):
 
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([390, 1010])
+        splitter.setSizes([380, 1060])
         outer_layout.addWidget(splitter, 1)
 
         self.setCentralWidget(outer)
@@ -524,6 +544,82 @@ class MainWindow(QMainWindow):
             if track is not None:
                 ids.append(track.id)
         return ids
+
+    def _track_context_menu(self, position: QPoint) -> None:
+        index = self.table.indexAt(position)
+        if not index.isValid():
+            return
+        selection = self.table.selectionModel()
+        if not selection.isSelected(index):
+            self.table.clearSelection()
+            self.table.selectRow(index.row())
+        ids = self.selected_track_ids()
+        if not ids:
+            return
+        track = self.db.get_track(ids[0])
+        if track is None:
+            return
+        menu = QMenu(self)
+        edit = menu.addAction("Edit Tags")
+        menu.addSeparator()
+        go_to_album = None
+        if self.tabs.currentIndex() == 0 and self._album_filter_id is None:
+            go_to_album = menu.addAction("Go to Album")
+            menu.addSeparator()
+        open_action = menu.addAction("Open")
+        open_with_action = menu.addAction("Open with")
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete")
+        menu.addSeparator()
+        finder_action = menu.addAction("Show in Finder")
+        chosen = menu.exec(self.table.viewport().mapToGlobal(position))
+        if chosen == edit:
+            self.edit_tags()
+        elif go_to_album is not None and chosen == go_to_album:
+            self.go_to_album(track)
+        elif chosen == open_action:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(track.path))
+        elif chosen == open_with_action:
+            self.open_with(track)
+        elif chosen == delete_action:
+            self.delete_tracks()
+        elif chosen == finder_action:
+            self.show_in_finder(track)
+
+    def go_to_album(self, track: Track) -> None:
+        self.tabs.setCurrentIndex(1)
+        self.refresh_albums()
+        for row in range(self.album_model.rowCount()):
+            album = self.album_model.album_at(row)
+            if album is not None and album.id == track.album_id:
+                index = self.album_model.index(row, 0)
+                self.album_view.setCurrentIndex(index)
+                self.album_view.selectionModel().select(
+                    index,
+                    QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                )
+                self.album_view.scrollTo(index)
+                return
+
+    def open_with(self, track: Track) -> None:
+        script = 'POSIX path of (choose application with prompt "Open with")'
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return
+        if result.returncode != 0:
+            return
+        application = result.stdout.strip()
+        if application:
+            QProcess.startDetached("open", ["-a", application, track.path])
+
+    def show_in_finder(self, track: Track) -> None:
+        QProcess.startDetached("open", ["-R", track.path])
 
     def _selection_changed(self, *_args: object) -> None:
         ids = self.selected_track_ids()
@@ -939,7 +1035,11 @@ class MainWindow(QMainWindow):
             action.toggled.connect(
                 lambda checked, column_key=key: self._set_column_visible(column_key, checked)
             )
-        menu.exec(header.mapToGlobal(position))
+        menu.addSeparator()
+        fit = menu.addAction("Auto-fit All Columns")
+        chosen = menu.exec(header.mapToGlobal(position))
+        if chosen == fit:
+            self._auto_fit_all_columns()
 
     def _set_column_visible(self, key: str, visible: bool) -> None:
         if not visible and len(self.visible_columns()) <= 1:
@@ -953,6 +1053,13 @@ class MainWindow(QMainWindow):
     def _auto_fit_column(self, section: int) -> None:
         header = self.table.horizontalHeader()
         header.resizeSection(section, max(60, header.sectionSizeHint(section)))
+        self._save_column_config()
+
+    def _auto_fit_all_columns(self) -> None:
+        header = self.table.horizontalHeader()
+        for index in range(self.model.columnCount()):
+            if not self.table.isColumnHidden(index):
+                header.resizeSection(index, max(60, header.sectionSizeHint(index)))
         self._save_column_config()
 
     # ------------------------------------------------------------------

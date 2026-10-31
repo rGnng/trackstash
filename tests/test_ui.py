@@ -280,3 +280,70 @@ def test_album_multi_selection(qtbot: QtBot, tmp_path: Path, audio_factory: Path
     ids = window.selected_track_ids()
     assert len(ids) == 2
     assert window.editor.artwork_info.text()
+
+
+def test_inline_pending_changes_and_go_to_album(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path, monkeypatch
+) -> None:
+    from PySide6.QtWidgets import QDialog, QMessageBox
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.table.selectRow(0)
+    editor = window.editor
+    assert editor.has_pending_changes is False
+
+    editor.lines["title"].setText("Pending Title")
+    editor._field_changed("title")
+    assert editor.has_pending_changes is True
+    assert editor.pending_edits()["title"] == "Pending Title"
+    assert "pending change" in editor.pending_label.text()
+
+    monkeypatch.setattr(
+        "trackstash.ui.main_window.TagPreviewDialog.exec",
+        lambda self: QDialog.DialogCode.Accepted,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    window.save_inline_edits(editor.pending_edits())
+    assert database.list_tracks(library_id=library.id)[0].title == "Pending Title"
+    assert editor.has_pending_changes is False
+
+    track = database.list_tracks(library_id=library.id)[0]
+    window.go_to_album(track)
+    assert window.tabs.currentIndex() == 1
+    assert window.album_view.selectionModel().hasSelection()
+
+
+def test_auto_fit_all_columns(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window._auto_fit_all_columns()
+    assert database.get_setting("track_columns")
+
+
+def test_numeric_fields_are_text_and_validated(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from PySide6.QtWidgets import QLineEdit
+
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.table.selectRow(0)
+    editor = window.editor
+    assert isinstance(editor.lines["track"], QLineEdit)
+    assert isinstance(editor.lines["disc"], QLineEdit)
+    assert not editor.lines["track"].isClearButtonEnabled()
+    editor.lines["track"].setText("A1")
+    editor._field_changed("track")
+    assert editor.save_button.isEnabled() is False
+    assert "numeric" in editor.pending_label.text().lower()

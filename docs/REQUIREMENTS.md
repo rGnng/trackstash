@@ -546,11 +546,16 @@ Unsupported files are never modified.
 
 - **Library selector:** a native dropdown controls the single current library; there is no aggregate All Tracks view.
 - **Right pane:** virtualized track table or album grid with search and filters.
+  Track columns can be reordered, auto-fitted, and shown/hidden; the layout is
+  persisted and configurable in Settings.
 - **Media editor (left):** artwork, editable canonical tags, technical properties,
-  and a fixed Save/Revert row.
+  pending-change highlighting, and a fixed Save/Revert row. Save opens a diff
+  preview before writing.
 - **Import:** a File → Import… action. Scans, adding libraries, relocation, and
   ReKey live in the Library Manager window.
 - **Albums view:** multi-select with drag or ⌘-click for batch tag editing.
+- **Track context menu:** Edit Tags, Go to Album, Open, Open with, Delete, and
+  Show in Finder.
 - **Import wizard:** source picker, tag preview/edit, copy or move mode, destination
   template preview, collision and duplicate handling, per-file progress, and undo.
 - **Batch editor:** tri-state fields, mixed-value indicators, transform actions,

@@ -170,14 +170,28 @@ class TagPreviewDialog(QDialog):
         self.setWindowTitle("Preview Tag Changes")
         self.resize(780, 420)
         layout = QVBoxLayout(self)
-        table = QTableWidget(len(changes), 3, self)
-        table.setHorizontalHeaderLabels(["File", "Changed fields", "Warning"])
+        table = QTableWidget(len(changes), 4, self)
+        table.setHorizontalHeaderLabels(["File", "Changed fields", "Before -> After", "Warning"])
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.horizontalHeader().setStretchLastSection(True)
         for row, change in enumerate(changes):
             table.setItem(row, 0, QTableWidgetItem(Path(change.path).name))
             table.setItem(row, 1, QTableWidgetItem(", ".join(change.changed_fields)))
-            table.setItem(row, 2, QTableWidgetItem(change.warning))
+            details: list[str] = []
+            for field_name in change.changed_fields:
+                before = getattr(change.before, field_name, "")
+                after = getattr(change.after, field_name, "")
+                if isinstance(before, list):
+                    before = ", ".join(str(item) for item in before)
+                if isinstance(after, list):
+                    after = ", ".join(str(item) for item in after)
+                if isinstance(before, bool):
+                    before = "yes" if before else "no"
+                if isinstance(after, bool):
+                    after = "yes" if after else "no"
+                details.append(f"{field_name}: {before or '—'} -> {after or '—'}")
+            table.setItem(row, 2, QTableWidgetItem("; ".join(details)))
+            table.setItem(row, 3, QTableWidgetItem(change.warning))
         layout.addWidget(table)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,

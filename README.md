@@ -17,17 +17,21 @@ consistent without cloud dependencies.
   dropdown. A Library Manager window handles adding, Quick/Full Scan, relocation,
   ReKey, enable/disable, and index removal. Imports copy by default or move on
   request from File → Import…, with a tag-driven destination template.
+- **Track context menu.** Edit Tags, Go to Album, Open, Open with, Delete, and
+  Show in Finder.
 - **Tracks and Albums views.** A sortable track table with movable/resizable
   columns (`Title`, `Format`, `Codec`, `Bitrate` in Kbps, and more) and a
   virtualized album grid with cover art. Double-click an album to filter tracks;
   select multiple albums for batch editing.
-- **Configurable columns.** Right-click the track header to show or hide columns;
-  order, width, and visibility persist and are also editable in Settings.
+- **Configurable columns.** Right-click the track header to show or hide columns,
+  auto-fit all widths, or drag sections. Order, width, and visibility persist and
+  are also editable in Settings.
 - **Tracks-compatible UUIDs.** Library, artist, album, and song IDs use the same
   deterministic MD5 algorithm as the Tracks macOS app and WebTracks.
-- **Tag editing.** Edit single tracks or batch selections with a preview and
-  per-track verification. Auto-number tracks per disc. Only fields changed in
-  the editor are written.
+- **Tag editing.** Edit directly in the left media editor; changed fields are
+  highlighted and counted, and Save opens a preview before writing. Batch edits
+  and per-disc auto-numbering are available from the Edit menu. Only changed
+  fields are written.
 - **Artwork.** View, embed, replace, remove, and extract front-cover artwork.
 - **Organization.** Rename and move files with a token template, live preview,
   collision detection, UUID remapping, journaling, and undo.
