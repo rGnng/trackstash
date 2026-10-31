@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPersistentModelIndex, Qt
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QAbstractTableModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    Qt,
+)
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 
-from trackstash.core.db import Track
+from trackstash.core.db import AlbumRow, Track
 
 COLUMNS: tuple[tuple[str, str], ...] = (
     ("Title", "title"),
@@ -123,3 +130,74 @@ def _sort_key(track: Track, field: str) -> str | float:
             return str(value)
         return float(value or 0)
     return str(value or "").casefold()
+
+
+class AlbumGridModel(QAbstractListModel):
+    """A virtualized album grid model with lazy artwork icons."""
+
+    def __init__(self, albums: list[AlbumRow] | None = None) -> None:
+        super().__init__()
+        self._albums = albums or []
+        self._icons: dict[str, QIcon] = {}
+
+    def rowCount(self, parent: QModelIndex | QPersistentModelIndex | None = None) -> int:
+        return 0 if parent is not None and parent.isValid() else len(self._albums)
+
+    def data(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> object:
+        if not index.isValid() or not (0 <= index.row() < len(self._albums)):
+            return None
+        album = self._albums[index.row()]
+        if role == Qt.ItemDataRole.DisplayRole:
+            year = f" · {album.year}" if album.year else ""
+            return f"{album.title}\n{album.artist}{year}"
+        if role == Qt.ItemDataRole.DecorationRole:
+            return self._icon(album)
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return f"{album.title}\n{album.artist}\n{album.track_count} tracks"
+        if role == Qt.ItemDataRole.UserRole:
+            return album.id
+        return None
+
+    def set_albums(self, albums: list[AlbumRow]) -> None:
+        self.beginResetModel()
+        self._albums = albums
+        self._icons.clear()
+        self.endResetModel()
+
+    def album_at(self, row: int) -> AlbumRow | None:
+        if 0 <= row < len(self._albums):
+            return self._albums[row]
+        return None
+
+    def _icon(self, album: AlbumRow) -> QIcon:
+        cached = self._icons.get(album.id)
+        if cached is not None:
+            return cached
+        pixmap = QPixmap(180, 180)
+        if album.artwork_path:
+            source = QPixmap(album.artwork_path)
+            if not source.isNull():
+                pixmap = source.scaled(
+                    180,
+                    180,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+        if pixmap.isNull() or album.artwork_path is None:
+            pixmap = QPixmap(180, 180)
+            color = QColor.fromHsv(abs(hash(album.id)) % 360, 90, 120)
+            pixmap.fill(color)
+            painter = QPainter(pixmap)
+            painter.setPen(QColor("#F5F7FA"))
+            font = painter.font()
+            font.setPointSize(42)
+            painter.setFont(font)
+            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "♪")
+            painter.end()
+        icon = QIcon(pixmap)
+        self._icons[album.id] = icon
+        return icon

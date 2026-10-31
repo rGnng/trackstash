@@ -456,13 +456,13 @@ movement number, and ReplayGain track/album gain and peak.
 
 `{title}`, `{artist}`, `{album_artist}`, `{album}`, `{year}`, `{date}`,
 `{genre}`, `{composer}`, `{comment}`, `{label}`, `{catalog}`, `{track}`,
-`{track_total}`, `{disc}`, `{disc_total}`, `{format}`, `{bitrate}`, `{ext}`,
+`{track_total}`, `{disc}`, `{disc_total}`, `{disc_dir}`, `{disc_prefix}`, `{format}`, `{bitrate}`, `{ext}`,
 plus padding (`{track:02}`), defaults (`{album|Unknown}`), and conditional
 segments. Tokens resolve from the edited metadata, not only the on-disk state.
 Unknown tokens are rejected during validation.
 
 The default import and organization template is
-`{album_artist}/{album}/{track:02} {title}` (D-18). It is configurable per library
+`{album_artist}/{album}/{disc_dir}{track:02} {title}` (D-18). `{disc_dir}` expands to `Disc N/` only for multi-disc albums, so single-disc paths stay flat. It is configurable per library
 and editable in the import wizard.
 
 ### 7.4 Tracks-compatible identity
@@ -544,7 +544,7 @@ Unsupported files are never modified.
 
 ## 9. UX outline
 
-- **Sidebar:** libraries, import, saved views, duplicate review, operation history, settings.
+- **Library selector:** a native dropdown controls the single current library; there is no aggregate All Tracks view.
 - **Main pane:** virtualized track table with search, filters, and selection.
 - **Library toolbar:** Import, Update (Quick/Full Scan), Organize, and Delete.
 - **Import wizard:** source picker, tag preview/edit, copy or move mode, destination
@@ -740,10 +740,11 @@ to be decided.
 | D-15 | Schema reuse | **Tracks-compatible `libraries`, `artists`, `albums`, and `songs` tables plus `ts_*` extension tables.** |
 | D-16 | Code reuse | **Port/borrow Tracks/WebTracks methods for compatibility** (identity, enumeration, quick/full scan, upsert, missing review, artwork cache); no runtime dependency on either project. |
 | D-17 | Audio preview | **Not in v1.** No playback or preview is implemented; the decision can be revisited later. |
-| D-18 | Default import template | **`{album_artist}/{album}/{track:02} {title}`**, configurable per library and editable in the import wizard. |
+| D-18 | Default import template | **`{album_artist}/{album}/{disc_dir}{track:02} {title}`**, where `{disc_dir}` adds `Disc N/` only for multi-disc albums. Configurable per library and editable in the import wizard. |
 | D-19 | Default library location | **`~/Music/TrackStash`**, created on first run and changeable in settings. |
 | D-20 | Online metadata | **Not implemented.** TrackStash never performs online metadata lookup; tags come from files, imports, and user edits. |
 | D-21 | Playlist import | **Post-M0.** Importing playlists (M3U/M3U8/PLS and similar) is planned after M0 and is not part of the scaffold; milestone placement is TBD. |
+| D-22 | Library UI scope | **One current library at a time.** Multiple libraries may exist, but the main window shows a library selector and never aggregates tracks from multiple libraries. |
 
 ### 12.2 Open decisions
 
@@ -792,7 +793,7 @@ None. All decisions are resolved.
 
 ## 13. Review checklist
 
-- [x] Decisions D-01 through D-21 are confirmed.
+- [x] Decisions D-01 through D-22 are confirmed.
 - [x] Section 2 goals and non-goals match the intended product.
 - [x] Section 5 functional requirements are complete and correctly prioritized.
 - [x] Section 5.11 import, update, and deletion semantics are correct.

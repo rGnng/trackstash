@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt, QUrl
+from PySide6.QtCore import QModelIndex, QSize, Qt, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -20,8 +20,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
+    QListView,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -30,6 +29,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QTableView,
+    QTabWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 
 from trackstash import __version__
 from trackstash.core.db import Database, Library, Track
-from trackstash.core.library import LibraryService, ScanResult, content_hash
+from trackstash.core.library import LibraryService, content_hash
 from trackstash.core.template import DEFAULT_TEMPLATE
 from trackstash.ui.dialogs import (
     DeleteDialog,
@@ -49,7 +49,7 @@ from trackstash.ui.dialogs import (
     TagEditorDialog,
     TagPreviewDialog,
 )
-from trackstash.ui.models import TrackTableModel
+from trackstash.ui.models import AlbumGridModel, TrackTableModel
 
 
 class MainWindow(QMainWindow):
@@ -73,6 +73,8 @@ class MainWindow(QMainWindow):
             self.service.cover_size = 500
             self.service.cover_quality = 80
         self._current_library_id: str | None = None
+        self._album_filter_id: str | None = None
+        self._album_filter_title: str = ""
         self._libraries: list[Library] = []
 
         self.setWindowTitle("TrackStash")
@@ -151,9 +153,14 @@ class MainWindow(QMainWindow):
 
         self.about_action = QAction("About TrackStash", self)
         self.about_action.triggered.connect(self.show_about)
+        self.about_action.setMenuRole(QAction.MenuRole.AboutRole)
+        self.settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
+        self.quit_action.setMenuRole(QAction.MenuRole.QuitRole)
 
     def _create_menus(self) -> None:
-        file_menu = self.menuBar().addMenu("&File")
+        menu_bar = self.menuBar()
+        menu_bar.setNativeMenuBar(True)
+        file_menu = menu_bar.addMenu("&File")
         file_menu.addAction(self.add_library_action)
         file_menu.addAction(self.import_action)
         file_menu.addSeparator()
@@ -200,49 +207,69 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
 
     def _create_central_widget(self) -> None:
-        splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        outer = QWidget(self)
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(8, 8, 8, 8)
 
-        sidebar = QWidget(splitter)
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(8, 8, 8, 8)
-        heading = QLabel("Libraries", sidebar)
-        heading.setStyleSheet("font-weight: 600;")
-        sidebar_layout.addWidget(heading)
-        self.library_list = QListWidget(sidebar)
-        self.library_list.currentItemChanged.connect(self._library_changed)
-        self.library_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.library_list.customContextMenuRequested.connect(self._library_context_menu)
-        sidebar_layout.addWidget(self.library_list, 1)
-        add_button = QPushButton("Add Library…", sidebar)
+        library_row = QHBoxLayout()
+        library_row.addWidget(QLabel("Library", outer))
+        self.library_combo = QComboBox(outer)
+        self.library_combo.setMinimumWidth(280)
+        self.library_combo.currentIndexChanged.connect(self._library_changed)
+        library_row.addWidget(self.library_combo)
+        manage_button = QPushButton("Manage…", outer)
+        manage_button.clicked.connect(self.open_library_menu)
+        library_row.addWidget(manage_button)
+        add_button = QPushButton("Add Library…", outer)
         add_button.clicked.connect(self.add_library)
-        sidebar_layout.addWidget(add_button)
-        splitter.addWidget(sidebar)
+        library_row.addWidget(add_button)
+        library_row.addStretch(1)
+        outer_layout.addLayout(library_row)
 
-        center = QWidget(splitter)
-        center_layout = QVBoxLayout(center)
         search_row = QHBoxLayout()
-        self.search_edit = QLineEdit(center)
+        self.search_edit = QLineEdit(outer)
         self.search_edit.setPlaceholderText("Search title, artist, album, genre, path…")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self.refresh_tracks)
-        self.format_filter = QComboBox(center)
+        self.format_filter = QComboBox(outer)
         self.format_filter.addItem("All formats", "")
         for extension in ("FLAC", "MP3", "M4A", "OGG", "OPUS", "APE", "WV", "WAV", "AIFF"):
             self.format_filter.addItem(extension, extension)
         self.format_filter.currentIndexChanged.connect(self.refresh_tracks)
-        self.missing_artwork = QCheckBox("Missing artwork", center)
+        self.missing_artwork = QCheckBox("Missing artwork", outer)
         self.missing_artwork.stateChanged.connect(self.refresh_tracks)
         self.missing_artwork.setToolTip("Show only tracks without a cached cover")
-        refresh_button = QPushButton("Refresh", center)
+        refresh_button = QPushButton("Refresh", outer)
         refresh_button.clicked.connect(self.refresh_tracks)
         search_row.addWidget(self.search_edit, 1)
         search_row.addWidget(self.format_filter)
         search_row.addWidget(self.missing_artwork)
         search_row.addWidget(refresh_button)
-        center_layout.addLayout(search_row)
+        outer_layout.addLayout(search_row)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal, outer)
+        center = QWidget(splitter)
+        center_layout = QVBoxLayout(center)
+        self.tabs = QTabWidget(center)
+        self.tabs.currentChanged.connect(self._tab_changed)
+
+        tracks_tab = QWidget(self.tabs)
+        tracks_layout = QVBoxLayout(tracks_tab)
+        tracks_layout.setContentsMargins(0, 0, 0, 0)
+        filter_row = QHBoxLayout()
+        self.album_filter_label = QLabel("", tracks_tab)
+        self.album_filter_label.setVisible(False)
+        clear_filter = QPushButton("Show all albums", tracks_tab)
+        clear_filter.setVisible(False)
+        self.clear_album_filter_button = clear_filter
+        clear_filter.clicked.connect(self.clear_album_filter)
+        filter_row.addWidget(self.album_filter_label)
+        filter_row.addWidget(clear_filter)
+        filter_row.addStretch(1)
+        tracks_layout.addLayout(filter_row)
 
         self.model = TrackTableModel()
-        self.table = QTableView(center)
+        self.table = QTableView(tracks_tab)
         self.table.setModel(self.model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -253,7 +280,29 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.doubleClicked.connect(self.edit_tags)
         self.table.selectionModel().selectionChanged.connect(self._selection_changed)
-        center_layout.addWidget(self.table, 1)
+        tracks_layout.addWidget(self.table, 1)
+        self.tabs.addTab(tracks_tab, "Tracks")
+
+        albums_tab = QWidget(self.tabs)
+        albums_layout = QVBoxLayout(albums_tab)
+        albums_layout.setContentsMargins(0, 0, 0, 0)
+        self.album_model = AlbumGridModel()
+        self.album_view = QListView(albums_tab)
+        self.album_view.setModel(self.album_model)
+        self.album_view.setViewMode(QListView.ViewMode.IconMode)
+        self.album_view.setResizeMode(QListView.ResizeMode.Adjust)
+        self.album_view.setMovement(QListView.Movement.Static)
+        self.album_view.setUniformItemSizes(True)
+        self.album_view.setWordWrap(True)
+        self.album_view.setIconSize(QSize(180, 180))
+        self.album_view.setGridSize(QSize(220, 260))
+        self.album_view.setSpacing(8)
+        self.album_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.album_view.doubleClicked.connect(self._album_activated)
+        albums_layout.addWidget(self.album_view, 1)
+        self.tabs.addTab(albums_tab, "Albums")
+
+        center_layout.addWidget(self.tabs, 1)
         splitter.addWidget(center)
 
         detail = QWidget(splitter)
@@ -318,11 +367,11 @@ class MainWindow(QMainWindow):
         detail_layout.addLayout(artwork_buttons)
         splitter.addWidget(detail)
 
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 0)
-        splitter.setSizes([220, 860, 320])
-        self.setCentralWidget(splitter)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([1000, 320])
+        outer_layout.addWidget(splitter, 1)
+        self.setCentralWidget(outer)
 
     def _create_status_bar(self) -> None:
         self.statusBar().showMessage(f"TrackStash {__version__}")
@@ -333,38 +382,41 @@ class MainWindow(QMainWindow):
     def refresh_libraries(self) -> None:
         previous = self._current_library_id
         self._libraries = self.db.list_libraries()
-        self.library_list.blockSignals(True)
-        self.library_list.clear()
-        all_item = QListWidgetItem("All Tracks")
-        all_item.setData(Qt.ItemDataRole.UserRole, None)
-        self.library_list.addItem(all_item)
+        self.library_combo.blockSignals(True)
+        self.library_combo.clear()
         for library in self._libraries:
             count = self.db.library_track_count(library.id)
             suffix = "" if library.enabled else " · disabled"
-            item = QListWidgetItem(f"{library.name}  ({count}){suffix}")
-            item.setData(Qt.ItemDataRole.UserRole, library.id)
-            self.library_list.addItem(item)
-        self.library_list.blockSignals(False)
+            self.library_combo.addItem(f"{library.name}  ({count}){suffix}", library.id)
+        self.library_combo.blockSignals(False)
 
-        target_row = 0
-        for row in range(self.library_list.count()):
-            if self.library_list.item(row).data(Qt.ItemDataRole.UserRole) == previous:
-                target_row = row
-                break
-        self.library_list.setCurrentRow(target_row)
-
-    def _library_changed(self, current: QListWidgetItem | None, _previous: object) -> None:
-        self._current_library_id = (
-            current.data(Qt.ItemDataRole.UserRole) if current is not None else None
-        )
+        if not self._libraries:
+            self.library_combo.setEnabled(False)
+            self._current_library_id = None
+            self._album_filter_id = None
+            self.refresh_tracks()
+            return
+        self.library_combo.setEnabled(True)
+        index = self.library_combo.findData(previous) if previous else 0
+        if index < 0:
+            index = 0
+        self.library_combo.blockSignals(True)
+        self.library_combo.setCurrentIndex(index)
+        self.library_combo.blockSignals(False)
+        self._current_library_id = str(self.library_combo.currentData() or "") or None
+        if previous != self._current_library_id:
+            self._album_filter_id = None
+            self._album_filter_title = ""
         self.refresh_tracks()
 
-    def _library_context_menu(self, position: QPoint) -> None:
-        item = self.library_list.itemAt(position)
-        if item is None:
-            return
-        library_id = item.data(Qt.ItemDataRole.UserRole)
-        library = self.db.get_library(library_id) if library_id else None
+    def _library_changed(self, _index: int) -> None:
+        self._current_library_id = str(self.library_combo.currentData() or "") or None
+        self._album_filter_id = None
+        self._album_filter_title = ""
+        self.refresh_tracks()
+
+    def open_library_menu(self) -> None:
+        library = self._require_library()
         if library is None:
             return
         menu = QMenu(self)
@@ -373,7 +425,7 @@ class MainWindow(QMainWindow):
         toggle = menu.addAction("Disable Library" if library.enabled else "Enable Library")
         menu.addSeparator()
         remove = menu.addAction("Remove Library Index…")
-        chosen = menu.exec(self.library_list.mapToGlobal(position))
+        chosen = menu.exec(self.library_combo.mapToGlobal(self.library_combo.rect().bottomLeft()))
         if chosen == rename:
             name, accepted = QInputDialog.getText(
                 self, "Library Name", "Display name:", text=library.name
@@ -408,7 +460,6 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "ReKey failed", str(exc))
                 return
             self.refresh_libraries()
-            self.refresh_tracks()
             QMessageBox.information(
                 self,
                 "ReKey complete",
@@ -417,7 +468,6 @@ class MainWindow(QMainWindow):
         elif chosen == toggle:
             self.db.set_library_enabled(library.id, not library.enabled)
             self.refresh_libraries()
-            self.refresh_tracks()
         elif chosen == remove:
             answer = QMessageBox.question(
                 self,
@@ -430,26 +480,73 @@ class MainWindow(QMainWindow):
             self.db.remove_library(library.id)
             self._current_library_id = None
             self.refresh_libraries()
-            self.refresh_tracks()
 
     def refresh_tracks(self) -> None:
         query = self.search_edit.text().strip() if hasattr(self, "search_edit") else ""
-        tracks = self.db.list_tracks(library_id=self._current_library_id, query=query)
+        if not self._current_library_id:
+            self.model.set_tracks([])
+            self._update_album_filter_ui()
+            self.statusBar().showMessage("No library selected")
+            if hasattr(self, "album_model"):
+                self.album_model.set_albums([])
+            return
+        tracks = self.db.list_tracks(
+            library_id=self._current_library_id,
+            album_id=self._album_filter_id,
+            query=query,
+        )
         if hasattr(self, "format_filter"):
             format_value = str(self.format_filter.currentData() or "")
             if format_value:
                 tracks = [track for track in tracks if track.format.upper() == format_value]
-        if self._current_library_id is None:
-            enabled = {library.id for library in self._libraries if library.enabled}
-            tracks = [track for track in tracks if track.library_id in enabled]
         if hasattr(self, "missing_artwork") and self.missing_artwork.isChecked():
             tracks = [track for track in tracks if not self._track_has_artwork(track)]
         self.model.set_tracks(tracks)
-        library_label = "All Tracks"
-        if self._current_library_id:
-            library = self.db.get_library(self._current_library_id)
-            library_label = library.name if library else "Library"
+        library = self.db.get_library(self._current_library_id)
+        library_label = library.name if library else "Library"
+        self._update_album_filter_ui()
         self.statusBar().showMessage(f"{library_label} · {len(tracks)} tracks")
+        self.refresh_albums()
+
+    def refresh_albums(self) -> None:
+        if not hasattr(self, "album_model"):
+            return
+        if not self._current_library_id:
+            self.album_model.set_albums([])
+            return
+        query = self.search_edit.text().strip() if hasattr(self, "search_edit") else ""
+        albums = self.db.list_albums(self._current_library_id, query=query)
+        self.album_model.set_albums(albums)
+        if hasattr(self, "tabs"):
+            self.tabs.setTabText(1, f"Albums ({len(albums)})")
+
+    def _tab_changed(self, index: int) -> None:
+        if index == 1:
+            self.refresh_albums()
+
+    def _album_activated(self, index: QModelIndex) -> None:
+        row = index.row()
+        album = self.album_model.album_at(row)
+        if album is None:
+            return
+        self._album_filter_id = album.id
+        self._album_filter_title = album.title
+        self.tabs.setCurrentIndex(0)
+        self.refresh_tracks()
+
+    def clear_album_filter(self) -> None:
+        self._album_filter_id = None
+        self._album_filter_title = ""
+        self.refresh_tracks()
+
+    def _update_album_filter_ui(self) -> None:
+        if not hasattr(self, "album_filter_label"):
+            return
+        visible = self._album_filter_id is not None
+        self.album_filter_label.setVisible(visible)
+        self.clear_album_filter_button.setVisible(visible)
+        if visible:
+            self.album_filter_label.setText(f"Album: {self._album_filter_title}")
 
     def _track_has_artwork(self, track: Track) -> bool:
         if track.artwork_path and Path(track.artwork_path).is_file():
@@ -594,28 +691,19 @@ class MainWindow(QMainWindow):
         library = self._require_library()
         if library is None:
             return
-        dialog = ImportDialog(self.service, self.db.list_libraries(), library.id, self)
+        dialog = ImportDialog(self.service, library, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.refresh_libraries()
             self.refresh_tracks()
             self.statusBar().showMessage("Import complete")
 
     def scan(self, mode: str) -> None:
-        libraries = (
-            [self.db.get_library(self._current_library_id)]
-            if self._current_library_id
-            else self._libraries
-        )
-        libraries = [library for library in libraries if library is not None]
-        if not libraries:
-            QMessageBox.information(self, "No library", "Add a library first.")
+        library = self._require_library()
+        if library is None:
             return
         progress = QProgressDialog("Scanning…", "Cancel", 0, 0, self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
-        all_missing: list[str] = []
-        errors: list[str] = []
-        results: list[ScanResult] = []
 
         def report(phase: str, current: int, total: int, message: str) -> None:
             text = f"{phase} {current}/{total}" if total else phase
@@ -625,11 +713,7 @@ class MainWindow(QMainWindow):
                 raise RuntimeError("Scan cancelled")
 
         try:
-            for library in libraries:
-                result = self.service.scan_library(library.id, mode=mode, progress=report)
-                results.append(result)
-                all_missing.extend(result.missing)
-                errors.extend(result.errors)
+            result = self.service.scan_library(library.id, mode=mode, progress=report)
         except RuntimeError as exc:
             progress.close()
             QMessageBox.information(self, "Scan", str(exc))
@@ -637,13 +721,8 @@ class MainWindow(QMainWindow):
             return
         progress.close()
         self.refresh_libraries()
-        self.refresh_tracks()
-        message = (
-            f"Discovered {sum(result.discovered for result in results)} files, "
-            f"updated {sum(result.updated for result in results)}."
-        )
-        if all_missing:
-            dialog = MissingFilesDialog(sorted(set(all_missing)), self)
+        if result.missing:
+            dialog = MissingFilesDialog(sorted(set(result.missing)), self)
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 selected = dialog.selected_paths()
                 ids = [
@@ -655,9 +734,10 @@ class MainWindow(QMainWindow):
                     self.service.delete_tracks(ids)
                     self.refresh_libraries()
                     self.refresh_tracks()
-        if errors:
-            message += f"\n{len(errors)} errors."
-            QMessageBox.warning(self, "Scan warnings", "\n".join(errors[:10]))
+        message = f"Discovered {result.discovered} files, updated {result.updated}."
+        if result.errors:
+            message += f"\n{len(result.errors)} errors."
+            QMessageBox.warning(self, "Scan warnings", "\n".join(result.errors[:10]))
         self.statusBar().showMessage(message)
 
     def edit_tags(self) -> None:
@@ -738,9 +818,12 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message)
 
     def find_duplicates(self) -> None:
+        library = self._require_library()
+        if library is None:
+            return
         self.statusBar().showMessage("Hashing tracks…")
         QApplication.processEvents()
-        tracks = self.db.list_tracks(library_id=self._current_library_id)
+        tracks = self.db.list_tracks(library_id=library.id)
         for index, track in enumerate(tracks, start=1):
             if self.db.get_content_hash(track.id):
                 continue

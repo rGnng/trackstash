@@ -286,6 +286,18 @@ class Operation:
     finished_at: float | None
 
 
+@dataclass(slots=True)
+class AlbumRow:
+    """An album summary used by the grid view."""
+
+    id: str
+    title: str
+    artist: str
+    year: str
+    track_count: int
+    artwork_path: str | None
+
+
 def _now() -> float:
     return time.time()
 
@@ -874,6 +886,7 @@ class Database:
         self,
         *,
         library_id: str | None = None,
+        album_id: str | None = None,
         query: str = "",
         limit: int | None = None,
         offset: int = 0,
@@ -883,6 +896,9 @@ class Database:
         if library_id:
             clauses.append("s.library_id = ?")
             parameters.append(library_id)
+        if album_id:
+            clauses.append("s.album_id = ?")
+            parameters.append(album_id)
         words = query.strip()
         if words:
             clauses.append(
@@ -907,6 +923,41 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(self._TRACK_SELECT + " WHERE s.id = ?", (song_id,)).fetchone()
         return _row_to_track(row) if row else None
+
+    def list_albums(self, library_id: str, query: str = "") -> list[AlbumRow]:
+        """Return album summaries for the grid view, optionally filtered."""
+        clauses = ["s.library_id = ?"]
+        parameters: list[Any] = [library_id]
+        if query.strip():
+            pattern = f"%{query.strip()}%"
+            clauses.append("(al.title LIKE ? OR ar.name LIKE ?)")
+            parameters.extend([pattern, pattern])
+        sql = (
+            "SELECT al.id, al.title, ar.name AS artist, al.year,"
+            " COUNT(s.id) AS track_count,"
+            " (SELECT a.cache_path FROM ts_artwork a"
+            "  JOIN songs s2 ON s2.id = a.song_id"
+            "  WHERE s2.album_id = al.id AND a.kind = 'front'"
+            "  AND a.cache_path != '' LIMIT 1) AS artwork_path"
+            " FROM albums al"
+            " JOIN artists ar ON ar.id = al.artist_id"
+            " JOIN songs s ON s.album_id = al.id"
+            " WHERE " + " AND ".join(clauses) + " GROUP BY al.id"
+            " ORDER BY al.title COLLATE NOCASE, ar.name COLLATE NOCASE"
+        )
+        with self.connect() as connection:
+            rows = connection.execute(sql, parameters).fetchall()
+        return [
+            AlbumRow(
+                id=row["id"],
+                title=row["title"],
+                artist=row["artist"],
+                year=row["year"],
+                track_count=int(row["track_count"]),
+                artwork_path=row["artwork_path"],
+            )
+            for row in rows
+        ]
 
     def get_tracks_by_ids(self, song_ids: Sequence[str]) -> list[Track]:
         if not song_ids:

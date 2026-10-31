@@ -240,17 +240,17 @@ class ImportDialog(QDialog):
     def __init__(
         self,
         service: LibraryService,
-        libraries: Sequence[Library],
-        current_library_id: str | None,
+        library: Library,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.service = service
+        self.library = library
         self.plan: ImportPlan | None = None
         self.import_result: ImportResult | None = None
         self.common_edits: dict[str, object] = {}
         self._sources: list[str] = []
-        self.setWindowTitle("Import into Library")
+        self.setWindowTitle(f"Import into {library.name}")
         self.resize(960, 560)
 
         layout = QVBoxLayout(self)
@@ -269,13 +269,7 @@ class ImportDialog(QDialog):
         layout.addLayout(source_row)
 
         options = QHBoxLayout()
-        options.addWidget(QLabel("Library", self))
-        self.library_combo = QComboBox(self)
-        for library in libraries:
-            self.library_combo.addItem(library.name, library.id)
-            if library.id == current_library_id:
-                self.library_combo.setCurrentIndex(self.library_combo.count() - 1)
-        options.addWidget(self.library_combo)
+        options.addWidget(QLabel(f"Target: {library.name}", self))
         options.addWidget(QLabel("Mode", self))
         self.mode_combo = QComboBox(self)
         self.mode_combo.addItem("Copy (recommended)", "copy")
@@ -361,10 +355,9 @@ class ImportDialog(QDialog):
 
     def preview(self) -> None:
         source = self.source_edit.text().strip()
-        library_id = self.library_combo.currentData()
         sources = self._sources or ([source] if source else [])
-        if not sources or not library_id:
-            QMessageBox.warning(self, "Import", "Choose a source and a target library.")
+        if not sources:
+            QMessageBox.warning(self, "Import", "Choose a source to import.")
             return
         try:
             files: list[Path] = []
@@ -390,7 +383,7 @@ class ImportDialog(QDialog):
         try:
             plan = self.service.plan_import(
                 sources,
-                str(library_id),
+                self.library.id,
                 mode=str(self.mode_combo.currentData()),
                 template=self.template_edit.text().strip() or DEFAULT_TEMPLATE,
                 common_edits=self.common_edits,

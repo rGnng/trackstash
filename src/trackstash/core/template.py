@@ -8,7 +8,7 @@ from pathlib import Path
 
 from trackstash.core.metadata import TagSet, TrackMetadata
 
-DEFAULT_TEMPLATE = "{album_artist}/{album}/{track:02} {title}"
+DEFAULT_TEMPLATE = "{album_artist}/{album}/{disc_dir}{track:02} {title}"
 
 _TOKEN_RE = re.compile(r"\{([a-zA-Z_]+)(?::(\d+))?(?:\|([^}]*))?\}")
 _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -47,6 +47,8 @@ def sanitize_relative_path(value: str) -> str:
 
 
 def _token_values(tags: TagSet, metadata: TrackMetadata) -> dict[str, str]:
+    multi_disc = tags.disc_total > 1 or tags.disc > 1
+    disc_number = tags.disc or 1
     return {
         "title": tags.title or "Unknown Title",
         "artist": tags.primary_artist,
@@ -63,6 +65,8 @@ def _token_values(tags: TagSet, metadata: TrackMetadata) -> dict[str, str]:
         "track_total": str(tags.track_total),
         "disc": str(tags.disc),
         "disc_total": str(tags.disc_total),
+        "disc_dir": f"Disc {disc_number}/" if multi_disc else "",
+        "disc_prefix": f"{disc_number:02}-" if multi_disc else "",
         "format": metadata.format.lower(),
         "bitrate": str(metadata.bitrate),
         "ext": Path(metadata.path).suffix.lstrip("."),

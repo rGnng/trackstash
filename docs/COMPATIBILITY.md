@@ -151,7 +151,7 @@ Ported from Tracks/WebTracks:
 TrackStash-specific behavior:
 
 - Imports copy by default and may move on request. Files are organized by tags
-  using the default template `{album_artist}/{album}/{track:02} {title}`.
+  using the default template `{album_artist}/{album}/{disc_dir}{track:02} {title}`. `{disc_dir}` inserts a `Disc N/` component only for multi-disc albums, preventing track-number collisions between discs.
 - Only tags edited in the import wizard are written back to the imported file.
 - Tag writes use mutagen and preserve unknown tags where the container supports
   them.

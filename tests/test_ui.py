@@ -75,7 +75,7 @@ def test_import_dialog_preview(qtbot: QtBot, tmp_path: Path, audio_factory: Path
             "album_artist": "UI Artist",
         },
     )
-    dialog = ImportDialog(service, [library], library.id)
+    dialog = ImportDialog(service, library)
     qtbot.addWidget(dialog)
     dialog.source_edit.setText(str(incoming))
     dialog.preview()
@@ -113,7 +113,7 @@ def test_import_dialog_execute(
             "album_artist": "UI Artist",
         },
     )
-    dialog = ImportDialog(service, [library], library.id)
+    dialog = ImportDialog(service, library)
     qtbot.addWidget(dialog)
     dialog.source_edit.setText(str(incoming))
     dialog.preview()
@@ -122,3 +122,35 @@ def test_import_dialog_execute(
     assert dialog.import_result is not None
     assert len(dialog.import_result.imported) == 1
     assert database.track_count(library.id) == 2
+
+
+def test_album_grid_and_library_selector(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+
+    assert window.library_combo.count() == 1
+    assert window.library_combo.currentData() == library.id
+    assert window.tabs.count() == 2
+    assert window.album_model.rowCount() == 1
+    assert window.album_model.data(window.album_model.index(0, 0)) is not None
+
+    window._album_activated(window.album_model.index(0, 0))
+    assert window.tabs.currentIndex() == 0
+    assert window.album_filter_label.isVisible()
+    assert window.model.rowCount() == 1
+    window.clear_album_filter()
+    assert window.model.rowCount() == 1
+
+
+def test_native_menu_roles(qtbot: QtBot, tmp_path: Path) -> None:
+    from PySide6.QtGui import QAction
+
+    database = Database(tmp_path / "menu.sqlite")
+    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    qtbot.addWidget(window)
+    assert window.quit_action.menuRole() == QAction.MenuRole.QuitRole
+    assert window.about_action.menuRole() == QAction.MenuRole.AboutRole
+    assert window.settings_action.menuRole() == QAction.MenuRole.PreferencesRole

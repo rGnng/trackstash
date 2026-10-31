@@ -208,3 +208,36 @@ def test_duplicate_import_skip_by_hash(
     result = service.execute_import(plan)
     assert result.imported == []
     assert service.db.track_count(library.id) == 1
+
+
+def test_multi_disc_import_uses_disc_folders(
+    service: LibraryService, tmp_path: Path, audio_factory: Path
+) -> None:
+    root = tmp_path / "MultiDisc"
+    root.mkdir()
+    incoming = tmp_path / "MultiIncoming"
+    incoming.mkdir()
+    for disc in (1, 2):
+        source = incoming / f"disc{disc}.flac"
+        shutil.copy2(audio_factory / "sample.flac", source)
+        write_tags(
+            source,
+            {
+                "title": "Same Song",
+                "artists": ["Disc Artist"],
+                "album": "Double Album",
+                "album_artist": "Disc Artist",
+                "track": 1,
+                "track_total": 1,
+                "disc": disc,
+                "disc_total": 2,
+            },
+        )
+    library = service.db.add_library(root, name="Multi")
+    plan = service.plan_import([incoming], library.id)
+    result = service.execute_import(plan)
+    assert len(result.imported) == 2
+    paths = sorted(track.path for track in result.imported)
+    assert any("Disc 1" in path for path in paths)
+    assert any("Disc 2" in path for path in paths)
+    assert len(set(paths)) == 2
