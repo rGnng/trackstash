@@ -86,6 +86,26 @@ SUPPORTED_EXTENSIONS = {
     ".dff",
 }
 
+
+_CODEC_LABELS = {
+    "mp4a.40.2": "AAC",
+    "mp4a.40.5": "HE-AAC",
+    "alac": "ALAC",
+    "OggVorbis": "Vorbis",
+    "OggOpus": "Opus",
+    "WavPack": "WavPack",
+    "WAVE": "PCM",
+    "AIFF": "PCM",
+    "MPEGInfo": "MP3",
+    "FLAC": "FLAC",
+    "MP3": "MP3",
+}
+
+
+def _codec_label(raw: str, format_name: str) -> str:
+    return _CODEC_LABELS.get(raw, raw or format_name)
+
+
 _TAG_FIELDS: tuple[str, ...] = (
     "title",
     "artists",
@@ -682,7 +702,7 @@ def read_metadata(path: str | Path) -> TrackMetadata:
     kind = _classify(audio)
     extension = Path(path_value).suffix.lower().lstrip(".").upper()
     format_name = extension or type(audio).__name__.upper()
-    codec = str(getattr(info, "codec", "") or type(audio).__name__)
+    codec = _codec_label(str(getattr(info, "codec", "") or type(audio).__name__), format_name)
     lossless = format_name in {"FLAC", "WAV", "AIFF", "AIF", "AIFC", "APE", "WV", "DSF", "DFF"} or (
         "ALAC" in codec.upper()
     )

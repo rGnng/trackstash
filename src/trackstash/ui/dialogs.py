@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -287,7 +288,7 @@ class ImportDialog(QDialog):
 
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel("Destination template", self))
-        self.template_edit = QLineEdit(DEFAULT_TEMPLATE, self)
+        self.template_edit = QLineEdit(service.default_template, self)
         self.template_edit.textEdited.connect(self._invalidate_plan)
         template_row.addWidget(self.template_edit, 1)
         overrides = QPushButton("Tag overrides…", self)
@@ -455,7 +456,7 @@ class OrganizeDialog(QDialog):
         layout = QVBoxLayout(self)
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel("Template", self))
-        self.template_edit = QLineEdit(DEFAULT_TEMPLATE, self)
+        self.template_edit = QLineEdit(service.default_template, self)
         template_row.addWidget(self.template_edit, 1)
         layout.addLayout(template_row)
 
@@ -694,16 +695,24 @@ class SettingsDialog(QDialog):
         template: str,
         cover_size: int,
         quality: int,
+        columns: Sequence[tuple[str, str]] = (),
+        visible_columns: Sequence[str] = (),
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.database = database
         self.setWindowTitle("TrackStash Settings")
-        self.setMinimumWidth(600)
+        self.setMinimumWidth(620)
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.template_edit = QLineEdit(template, self)
-        form.addRow("Default import template", self.template_edit)
+        form.addRow("Organization template", self.template_edit)
+        template_hint = QLabel(
+            "Used by Import and Organize. {disc_dir} adds Disc N/ only for multi-disc albums.",
+            self,
+        )
+        template_hint.setWordWrap(True)
+        form.addRow("", template_hint)
         self.cover_size = QSpinBox(self)
         self.cover_size.setRange(64, 2000)
         self.cover_size.setValue(cover_size)
@@ -716,6 +725,17 @@ class SettingsDialog(QDialog):
         self.database_label.setReadOnly(True)
         form.addRow("Database", self.database_label)
         layout.addLayout(form)
+
+        columns_group = QGroupBox("Tracks view columns", self)
+        columns_layout = QVBoxLayout(columns_group)
+        self.column_checks: dict[str, QCheckBox] = {}
+        visible = set(visible_columns) if visible_columns else {key for key, _ in columns}
+        for key, label in columns:
+            check = QCheckBox(label, columns_group)
+            check.setChecked(key in visible)
+            columns_layout.addWidget(check)
+            self.column_checks[key] = check
+        layout.addWidget(columns_group)
 
         backup_row = QHBoxLayout()
         backup_row.addWidget(QLabel("Create a consistent SQLite backup.", self))
@@ -748,11 +768,13 @@ class SettingsDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Backup failed", str(exc))
 
-    def values(self) -> tuple[str, int, int]:
+    def values(self) -> tuple[str, int, int, list[str]]:
+        visible = [key for key, check in self.column_checks.items() if check.isChecked()]
         return (
             self.template_edit.text().strip() or DEFAULT_TEMPLATE,
             self.cover_size.value(),
             self.quality.value(),
+            visible or [key for key, _ in self.column_checks.items()],
         )
 
 

@@ -154,3 +154,69 @@ def test_native_menu_roles(qtbot: QtBot, tmp_path: Path) -> None:
     assert window.quit_action.menuRole() == QAction.MenuRole.QuitRole
     assert window.about_action.menuRole() == QAction.MenuRole.AboutRole
     assert window.settings_action.menuRole() == QAction.MenuRole.PreferencesRole
+
+
+def test_inline_editor_and_column_persistence(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.table.selectRow(0)
+    assert window.editor.lines["title"].text() == "UI Song"
+    assert window.editor.edits()["title"] == "UI Song"
+    assert window.import_button.text() == "Import…"
+
+    from trackstash.ui.models import COLUMNS
+
+    columns = [key for _, key in COLUMNS]
+    assert "codec" in columns
+    codec_index = columns.index("codec")
+    bitrate_index = columns.index("bitrate")
+    window.model.data(window.model.index(0, bitrate_index))
+    assert "Kbps" in str(window.model.data(window.model.index(0, bitrate_index)))
+    assert window.table.horizontalHeader().sectionsMovable()
+
+    window._set_column_visible("codec", False)
+    assert "codec" not in window.visible_columns()
+    assert database.get_setting("track_columns")
+
+    reopened = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    qtbot.addWidget(reopened)
+    assert "codec" not in reopened.visible_columns()
+    assert reopened.table.isColumnHidden(codec_index)
+
+
+def test_library_manager_contains_scan_and_add(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from trackstash.ui.library_manager import LibraryManagerDialog
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    dialog = LibraryManagerDialog(database, service, library.id)
+    qtbot.addWidget(dialog)
+    assert dialog.quick_button.text() == "Quick Scan"
+    assert dialog.full_button.text() == "Full Scan"
+    assert dialog.library_combo.count() == 1
+
+
+def test_settings_can_choose_track_columns(qtbot: QtBot, tmp_path: Path) -> None:
+    from trackstash.ui.dialogs import SettingsDialog
+    from trackstash.ui.models import COLUMNS
+
+    database = Database(tmp_path / "settings.sqlite")
+    dialog = SettingsDialog(
+        database,
+        "{artist}/{album}/{title}",
+        500,
+        80,
+        [(key, label) for label, key in COLUMNS],
+        ["title", "codec"],
+    )
+    qtbot.addWidget(dialog)
+    assert dialog.column_checks["codec"].isChecked()
+    assert dialog.column_checks["path"].isChecked() is False
+    assert dialog.values()[3] == ["title", "codec"]

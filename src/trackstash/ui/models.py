@@ -23,6 +23,7 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("Disc", "disc"),
     ("Genre", "genre"),
     ("Format", "format"),
+    ("Codec", "codec"),
     ("Bitrate", "bitrate"),
     ("Duration", "duration"),
     ("Path", "path"),
@@ -67,7 +68,7 @@ class TrackTableModel(QAbstractTableModel):
             if column == "disc":
                 return f"{track.disc}/{track.disc_total}" if track.disc_total else str(track.disc)
             if column == "bitrate":
-                return f"{track.bitrate} kbps" if track.bitrate else ""
+                return f"{track.bitrate} Kbps" if track.bitrate else ""
             if column == "duration":
                 return _duration_text(track.duration)
             return str(value or "")

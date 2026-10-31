@@ -545,11 +545,13 @@ Unsupported files are never modified.
 ## 9. UX outline
 
 - **Library selector:** a native dropdown controls the single current library; there is no aggregate All Tracks view.
-- **Main pane:** virtualized track table with search, filters, and selection.
-- **Library toolbar:** Import, Update (Quick/Full Scan), Organize, and Delete.
+- **Right pane:** virtualized track table or album grid with search and filters.
+- **Media editor (left):** artwork, editable canonical tags, technical properties,
+  and a fixed Save/Revert row.
+- **Bottom action bar:** the Import button. Scans, adding libraries, relocation,
+  and ReKey live in the Library Manager window.
 - **Import wizard:** source picker, tag preview/edit, copy or move mode, destination
   template preview, collision and duplicate handling, per-file progress, and undo.
-- **Detail panel:** artwork, canonical tags, technical properties, raw tags.
 - **Batch editor:** tri-state fields, mixed-value indicators, transform actions,
   auto-numbering, and a diff preview before saving.
 - **Preview dialog:** per-file before/after values, path changes, old and new
@@ -557,7 +559,8 @@ Unsupported files are never modified.
   confirmation.
 - **Delete dialog:** index-only versus index plus system Trash, file list and
   sizes, and a clear statement of which outcome is reversible.
-- **Identity panel:** library identifier, current namespace, and the ReKey action.
+- **Library Manager:** library identity, namespace, Quick/Full Scan, relocation,
+  ReKey, enable/disable, and removal.
 - **Progress center:** running and completed operations, cancellable, with a
   per-file error list and an undo action where the operation is reversible.
 

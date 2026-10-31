@@ -16,8 +16,11 @@ consistent without cloud dependencies.
 - **Managed library.** One current library at a time, selected from a native
   dropdown. Imports copy by default or move on request, with a tag-driven
   destination template.
-- **Tracks and Albums views.** A sortable track table and a virtualized album
-  grid with cover art; double-click an album to filter its tracks.
+- **Tracks and Albums views.** A sortable track table with movable/resizable
+  columns (`Title`, `Format`, `Codec`, `Bitrate` in Kbps, and more) and a
+  virtualized album grid with cover art. Double-click an album to filter tracks.
+- **Configurable columns.** Right-click the track header to show or hide columns;
+  order, width, and visibility persist and are also editable in Settings.
 - **Tracks-compatible UUIDs.** Library, artist, album, and song IDs use the same
   deterministic MD5 algorithm as the Tracks macOS app and WebTracks.
 - **Tag editing.** Edit single tracks or batch selections with a preview and

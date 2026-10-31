@@ -262,6 +262,7 @@ class Track:
     mtime: float
     file_size: int
     format: str
+    codec: str
     bitrate: int
     sample_rate: int
     channels: int
@@ -341,6 +342,7 @@ def _row_to_track(row: sqlite3.Row) -> Track:
         mtime=float(row["mtime"]),
         file_size=int(row["file_size"]),
         format=row["format"] or "",
+        codec=row["codec"] or "",
         bitrate=int(row["bitrate"] or 0),
         sample_rate=int(row["sample_rate"] or 0),
         channels=int(row["channels"] or 0),
@@ -912,7 +914,7 @@ class Database:
                al.title AS album, s.genre, s.year, s.track, s.track_total,
                s.disc, s.disc_total, s.comments, s.duration, s.date_added,
                s.play_count, s.rating, s.loved, s.last_played, s.skip_count,
-               s.mtime, s.file_size, p.format, p.bitrate, p.sample_rate,
+               s.mtime, s.file_size, p.format, p.codec, p.bitrate, p.sample_rate,
                p.channels, p.bit_depth, p.lossless,
                a.cache_path AS artwork_path, s.album_id
         FROM songs s
