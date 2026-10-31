@@ -116,6 +116,21 @@ class MainWindow(QMainWindow):
         self.auto_number_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
         self.auto_number_action.triggered.connect(self.auto_number_tracks)
 
+        self.tracks_view_action = QAction("Tracks", self)
+        self.tracks_view_action.setShortcut(QKeySequence("Ctrl+1"))
+        self.tracks_view_action.setCheckable(True)
+        self.tracks_view_action.setChecked(True)
+        self.tracks_view_action.triggered.connect(lambda: self.tabs.setCurrentIndex(0))
+
+        self.albums_view_action = QAction("Albums", self)
+        self.albums_view_action.setShortcut(QKeySequence("Ctrl+2"))
+        self.albums_view_action.setCheckable(True)
+        self.albums_view_action.triggered.connect(lambda: self.tabs.setCurrentIndex(1))
+
+        self.focus_search_action = QAction("Search", self)
+        self.focus_search_action.setShortcut(QKeySequence.StandardKey.Find)
+        self.focus_search_action.triggered.connect(self.focus_search)
+
         self.organize_action = QAction("Organize…", self)
         self.organize_action.triggered.connect(self.organize)
 
@@ -196,6 +211,12 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.redo_action)
         edit_menu.addSeparator()
         edit_menu.addAction(self.settings_action)
+
+        view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction(self.tracks_view_action)
+        view_menu.addAction(self.albums_view_action)
+        view_menu.addSeparator()
+        view_menu.addAction(self.focus_search_action)
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.help_action)
@@ -533,8 +554,16 @@ class MainWindow(QMainWindow):
             self.tabs.setTabText(1, f"Albums ({len(albums)})")
 
     def _tab_changed(self, index: int) -> None:
+        if hasattr(self, "tracks_view_action"):
+            self.tracks_view_action.setChecked(index == 0)
+            self.albums_view_action.setChecked(index == 1)
         if index == 1:
             self.refresh_albums()
+
+    def focus_search(self) -> None:
+        self.tabs.setCurrentIndex(0)
+        self.search_edit.setFocus()
+        self.search_edit.selectAll()
 
     def _album_activated(self, index: QModelIndex) -> None:
         row = index.row()

@@ -54,6 +54,10 @@ uv run trackstash
 On first run TrackStash creates `~/Music/TrackStash` and stores its database in
 `~/Library/Application Support/TrackStash/library.sqlite`.
 
+When launched with `uv run`, macOS attributes the application menu to the Python
+process. Use the packaged `.app` to see the native **TrackStash** application
+menu with About, Settings, and Quit.
+
 Useful development flags:
 
 ```bash
