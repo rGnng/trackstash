@@ -23,7 +23,6 @@ from PySide6.QtGui import (
     QDesktopServices,
     QIcon,
     QKeySequence,
-    QPalette,
     QPixmap,
     QResizeEvent,
 )
@@ -71,9 +70,8 @@ from trackstash.ui.library_manager import LibraryManagerDialog
 from trackstash.ui.models import COLUMNS, AlbumGridModel, TrackTableModel
 
 ALBUM_MIN_COVER = 158
-ALBUM_COLUMN_GAP = 22
-ALBUM_ROW_GAP = 26
-ALBUM_TEXT_HEIGHT = 34
+ALBUM_SPACING = 22
+ALBUM_ITEM_MARGIN = 6
 
 
 class AlbumGridView(QListView):
@@ -463,10 +461,6 @@ class MainWindow(QMainWindow):
         self.album_view = AlbumGridView(albums_tab)
         self.album_view.setModel(self.album_model)
         self.album_view.setFrameShape(QFrame.Shape.NoFrame)
-        self.album_view.setBackgroundRole(QPalette.ColorRole.Base)
-        self.album_view.setAutoFillBackground(True)
-        self.album_view.viewport().setBackgroundRole(QPalette.ColorRole.Base)
-        self.album_view.viewport().setAutoFillBackground(True)
         self.album_view.setLineWidth(0)
         self.album_view.setViewMode(QListView.ViewMode.IconMode)
         self.album_view.setResizeMode(QListView.ResizeMode.Adjust)
@@ -476,8 +470,7 @@ class MainWindow(QMainWindow):
         self.album_view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.album_view.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.album_view.setIconSize(QSize(ALBUM_MIN_COVER, ALBUM_MIN_COVER))
-        self.album_view.setSpacing(0)
-        self.album_view.setViewportMargins(0, 22, 0, 0)
+        self.album_view.setSpacing(ALBUM_SPACING)
         self.album_view.resize_callback = self._update_album_grid
         self.album_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.album_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
@@ -649,18 +642,15 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "album_view"):
             return
         available = width if width is not None else self.album_view.viewport().width()
-        # QListView reserves a small internal margin around its cell grid.
-        available = max(1, available - 16)
-        columns = max(1, available // (ALBUM_MIN_COVER + ALBUM_COLUMN_GAP))
-        cover = max(1, (available - columns * ALBUM_COLUMN_GAP) // columns)
+        available = max(1, available)
+        pitch = ALBUM_MIN_COVER + ALBUM_ITEM_MARGIN + ALBUM_SPACING
+        columns = max(1, available // pitch)
+        cover = max(
+            1,
+            min(240, available // columns - ALBUM_ITEM_MARGIN - ALBUM_SPACING),
+        )
         self.album_model.set_cover_size(cover)
         self.album_view.setIconSize(QSize(cover, cover))
-        self.album_view.setGridSize(
-            QSize(
-                cover + ALBUM_COLUMN_GAP,
-                cover + ALBUM_TEXT_HEIGHT + ALBUM_ROW_GAP,
-            )
-        )
 
     def _album_context_menu(self, position: QPoint) -> None:
         index = self.album_view.indexAt(position)

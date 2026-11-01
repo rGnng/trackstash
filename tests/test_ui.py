@@ -64,7 +64,7 @@ def test_main_window_lists_and_filters(qtbot: QtBot, tmp_path: Path, audio_facto
 
 def test_import_dialog_preview(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
     database, library = _library_with_tracks(tmp_path, audio_factory)
-    service = LibraryService(database)
+    service = LibraryService(database, default_template="{artist}/{album}/{title}")
     incoming = tmp_path / "More"
     incoming.mkdir()
     shutil.copy2(audio_factory / "sample.mp3", incoming / "sample.mp3")
@@ -79,10 +79,15 @@ def test_import_dialog_preview(qtbot: QtBot, tmp_path: Path, audio_factory: Path
     )
     dialog = ImportDialog(service, library)
     qtbot.addWidget(dialog)
+    assert not hasattr(dialog, "template_edit")
     dialog.source_edit.setText(str(incoming))
     dialog.preview()
     assert dialog.table.rowCount() == 1
     assert dialog.import_button.isEnabled()
+    assert dialog.plan is not None
+    assert dialog.plan.items[0].destination == (
+        Path(library.path) / "UI Artist" / "UI Album" / "Second Song.mp3"
+    )
 
 
 def test_single_track_tag_editor(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
@@ -197,14 +202,12 @@ def test_album_grid_fills_viewport_with_fixed_gaps(
     qtbot.addWidget(window)
 
     window._update_album_grid(1100)
-    assert window.album_view.iconSize().width() == 158
-    assert window.album_view.gridSize().width() == 180
-    assert window.album_view.gridSize().height() == 218
+    assert window.album_view.iconSize().width() == 192
+    assert window.album_view.spacing() == 22
 
     window._update_album_grid(940)
-    assert window.album_view.iconSize().width() == 162
-    assert window.album_view.gridSize().width() == 184
-    assert window.album_view.gridSize().height() == 222
+    assert window.album_view.iconSize().width() == 160
+    assert window.album_view.spacing() == 22
 
 
 def test_album_grid_does_not_show_year(qtbot: QtBot) -> None:
