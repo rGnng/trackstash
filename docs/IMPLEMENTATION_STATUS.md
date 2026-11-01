@@ -15,7 +15,7 @@
 | M1 | Complete | Tracks-compatible UUIDs, mutagen tag engine, Tracks-compatible base schema |
 | M2 | Complete | Managed import, quick/full scan, move detection, missing-file handling, search |
 | M3 | Complete | Qt browser with single-library selector, left media editor, Tracks and Albums grid views, configurable columns, import wizard |
-| M4 | Complete | Single/batch tag editor, auto-numbering, previews, verified writes, artwork, journal, undo/redo |
+| M4 | Complete | Inline single/multi tag editor with pending changes, auto-numbering, previews, verified writes, artwork, journal, undo/redo |
 | M5 | Complete | Template organization, library relocation, UUID remapping, duplicate review, index/Trash deletion |
 | M6 | Complete | Backup/restore, settings, ReKey, PyInstaller app bundle, ad-hoc signed DMG |
 
@@ -38,7 +38,7 @@
 Test status at the time of writing:
 
 ```text
-60 passed, 2 skipped (default suite)
+61 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 

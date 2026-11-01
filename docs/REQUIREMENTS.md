@@ -548,9 +548,10 @@ Unsupported files are never modified.
 - **Right pane:** virtualized track table or album grid with search and filters.
   Track columns can be reordered, auto-fitted, and shown/hidden; the layout is
   persisted and configurable in Settings.
-- **Media editor (left):** artwork, editable canonical tags, technical properties,
-  pending-change highlighting, and a fixed Save/Revert row. Save opens a diff
-  preview before writing.
+- **Media editor (left):** artwork, editable canonical tags, pending-change
+  highlighting, and a fixed Save/Revert row. Multi-selection shows shared values
+  and italic `Multiple` placeholders for mixed fields. Save opens a diff preview
+  before writing.
 - **Import:** a File → Import… action. Scans, adding libraries, relocation, and
   ReKey live in the Library Manager window.
 - **Albums view:** multi-select with drag or ⌘-click for batch tag editing.

@@ -29,9 +29,10 @@ consistent without cloud dependencies.
 - **Tracks-compatible UUIDs.** Library, artist, album, and song IDs use the same
   deterministic MD5 algorithm as the Tracks macOS app and WebTracks.
 - **Tag editing.** Edit directly in the left media editor; changed fields are
-  highlighted and counted, and Save opens a preview before writing. Batch edits
-  and per-disc auto-numbering are available from the Edit menu. Only changed
-  fields are written.
+  highlighted and counted, and Save opens a preview before writing. Multi-track
+  selections show shared values and italic `Multiple` placeholders, so one field
+  can be applied to the whole selection. Batch edits and per-disc auto-numbering
+  are also available from the Edit menu.
 - **Artwork.** View, embed, replace, remove, and extract front-cover artwork.
 - **Organization.** Rename and move files with a token template, live preview,
   collision detection, UUID remapping, journaling, and undo.

@@ -142,6 +142,8 @@ def test_album_grid_and_library_selector(qtbot: QtBot, tmp_path: Path, audio_fac
     assert window.album_filter_label.isVisible()
     assert window.model.rowCount() == 1
     window.clear_album_filter()
+    assert window.tabs.currentIndex() == 1
+    assert window.album_view.selectionModel().hasSelection()
     assert window.model.rowCount() == 1
 
 
@@ -251,7 +253,9 @@ def test_inline_save_and_table_sorting(
     assert window.model.rowCount() >= 1
 
 
-def test_album_multi_selection(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
+def test_album_multi_selection(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path, monkeypatch
+) -> None:
     from PySide6.QtWidgets import QAbstractItemView
 
     database, library = _library_with_tracks(tmp_path, audio_factory)
@@ -270,6 +274,14 @@ def test_album_multi_selection(qtbot: QtBot, tmp_path: Path, audio_factory: Path
         },
     )
     service.execute_import(service.plan_import([extra], library.id))
+    from io import BytesIO
+
+    from PIL import Image
+
+    cover = BytesIO()
+    Image.new("RGB", (32, 32), (20, 120, 180)).save(cover, "JPEG")
+    track_ids = [track.id for track in database.list_tracks(library_id=library.id)]
+    service.set_artwork(track_ids, cover.getvalue(), mime="image/jpeg")
     window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
     qtbot.addWidget(window)
     window.show()
@@ -280,6 +292,24 @@ def test_album_multi_selection(qtbot: QtBot, tmp_path: Path, audio_factory: Path
     ids = window.selected_track_ids()
     assert len(ids) == 2
     assert window.editor.artwork_info.text()
+    assert not window.editor._artwork_pixmap.isNull()
+    assert window.editor.lines["title"].placeholderText() == "Multiple"
+    assert window.editor.lines["title"].text() == ""
+
+    from PySide6.QtWidgets import QDialog, QMessageBox
+
+    monkeypatch.setattr(
+        "trackstash.ui.main_window.TagPreviewDialog.exec",
+        lambda self: QDialog.DialogCode.Accepted,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    window.editor.lines["album"].setText("Batch Album")
+    window.editor._field_changed("album")
+    assert window.editor.pending_edits()["album"] == "Batch Album"
+    window.save_inline_edits(window.editor.pending_edits())
+    updated = database.list_tracks(library_id=library.id)
+    assert all(track.album == "Batch Album" for track in updated)
 
 
 def test_inline_pending_changes_and_go_to_album(
@@ -347,3 +377,18 @@ def test_numeric_fields_are_text_and_validated(
     editor._field_changed("track")
     assert editor.save_button.isEnabled() is False
     assert "numeric" in editor.pending_label.text().lower()
+
+
+def test_status_bar_shows_selection(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.table.clearSelection()
+    window._update_status()
+    assert "tracks" in window.status_summary.text()
+    window.table.selectRow(0)
+    assert "1 selected" in window.status_summary.text()
+    window.table.clearSelection()
+    assert "selected" not in window.status_summary.text()
