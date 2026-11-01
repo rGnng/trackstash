@@ -457,7 +457,7 @@ class MainWindow(QMainWindow):
 
         albums_tab = QWidget(self.tabs)
         albums_layout = QVBoxLayout(albums_tab)
-        albums_layout.setContentsMargins(0, 22, 0, 0)
+        albums_layout.setContentsMargins(0, 0, 0, 0)
         self.album_model = AlbumGridModel()
         self.album_view = AlbumGridView(albums_tab)
         self.album_view.setModel(self.album_model)
