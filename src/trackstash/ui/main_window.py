@@ -197,7 +197,9 @@ class MainWindow(QMainWindow):
 
     def _create_menus(self) -> None:
         menu_bar = self.menuBar()
-        menu_bar.setNativeMenuBar(True)
+        # Keep the menu bar inside the window so it uses the same Fusion style as
+        # the rest of the interface instead of macOS's native menu bar.
+        menu_bar.setNativeMenuBar(False)
 
         file_menu = menu_bar.addMenu("&File")
         file_menu.addAction(self.import_action)

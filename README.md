@@ -24,6 +24,9 @@ consistent without cloud dependencies.
   table is sortable with movable/resizable columns (`Title`, `Format`, `Codec`,
   `Bitrate` in Kbps, and more); the album grid shows cover art. Double-click an
   album to filter tracks; select multiple albums for batch editing.
+- **Consistent Qt interface.** The app uses Qt's Fusion style and an in-window
+  menu bar, so buttons, menus, and other controls share one appearance instead
+  of mixing native macOS and Qt-drawn widgets.
 - **Configurable columns.** Right-click the track header to show or hide columns,
   auto-fit all widths, or drag sections. Order, width, and visibility persist and
   are also editable in Settings.

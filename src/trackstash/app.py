@@ -39,12 +39,14 @@ def create_application(argv: Sequence[str] | None = None) -> QApplication:
 
 
 def configure_application(app: QApplication) -> None:
-    """Apply application identity used by Qt and macOS."""
+    """Apply application identity and the unified Qt-drawn visual style."""
     app.setApplicationName("TrackStash")
     app.setApplicationDisplayName("TrackStash")
     app.setOrganizationName("TrackStash")
     app.setOrganizationDomain("trackstash.app")
     app.setApplicationVersion(__version__)
+    # Use one Qt style so controls and menus do not mix native and Qt-drawn looks.
+    app.setStyle("Fusion")
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:

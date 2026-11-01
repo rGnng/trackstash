@@ -153,8 +153,7 @@ class AlbumGridModel(QAbstractListModel):
             return None
         album = self._albums[index.row()]
         if role == Qt.ItemDataRole.DisplayRole:
-            year = f" · {album.year}" if album.year else ""
-            return f"{album.title}\n{album.artist}{year}"
+            return f"{album.title}\n{album.artist}"
         if role == Qt.ItemDataRole.DecorationRole:
             return self._icon(album)
         if role == Qt.ItemDataRole.ToolTipRole:

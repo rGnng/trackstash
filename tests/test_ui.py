@@ -159,12 +159,23 @@ def test_album_grid_and_library_selector(qtbot: QtBot, tmp_path: Path, audio_fac
     assert window.model.rowCount() == 1
 
 
-def test_native_menu_roles(qtbot: QtBot, tmp_path: Path) -> None:
+def test_album_grid_does_not_show_year(qtbot: QtBot) -> None:
+    from trackstash.core.db import AlbumRow
+    from trackstash.ui.models import AlbumGridModel
+
+    model = AlbumGridModel([AlbumRow("album-id", "Album Title", "Album Artist", "2024", 1, None)])
+    text = model.data(model.index(0, 0))
+    assert text == "Album Title\nAlbum Artist"
+    assert "2024" not in str(text)
+
+
+def test_menu_roles_and_qt_menu_bar(qtbot: QtBot, tmp_path: Path) -> None:
     from PySide6.QtGui import QAction
 
     database = Database(tmp_path / "menu.sqlite")
     window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
     qtbot.addWidget(window)
+    assert not window.menuBar().isNativeMenuBar()
     assert window.quit_action.menuRole() == QAction.MenuRole.QuitRole
     assert window.about_action.menuRole() == QAction.MenuRole.AboutRole
     assert window.settings_action.menuRole() == QAction.MenuRole.PreferencesRole

@@ -33,6 +33,21 @@ def test_main_window_starts(qtbot: QtBot, tmp_path: Path) -> None:
     assert window.isVisible()
 
 
+def test_application_uses_fusion_style(qtbot: QtBot) -> None:
+    from PySide6.QtWidgets import QApplication
+
+    from trackstash.app import configure_application
+
+    app = QApplication.instance()
+    assert isinstance(app, QApplication)
+    previous_style = app.style().objectName()
+    try:
+        configure_application(app)
+        assert app.style().objectName().casefold() == "fusion"
+    finally:
+        app.setStyle(previous_style)
+
+
 def test_sqlite_has_fts5() -> None:
     connection = sqlite3.connect(":memory:")
     try:

@@ -14,7 +14,7 @@
 | M0 | Complete | uv/Python 3.12, PySide6 6.11.3, CI, GPL license, docs |
 | M1 | Complete | Tracks-compatible UUIDs, mutagen tag engine, Tracks-compatible base schema |
 | M2 | Complete | Managed import, quick/full scan, move detection, missing-file handling, search |
-| M3 | Complete | Qt browser with single-library selector, left media editor, Tracks and Albums grid views, configurable columns, import wizard |
+| M3 | Complete | Fusion-styled Qt browser with in-window menus, single-library selector, left media editor, Tracks and Albums grid views, configurable columns, import wizard |
 | M4 | Complete | Inline single/multi tag editor with pending changes, auto-numbering, previews, verified writes, artwork, journal, undo/redo |
 | M5 | Complete | Template organization, library relocation, UUID remapping, duplicate review, index/Trash deletion |
 | M6 | Complete | Backup/restore, settings, ReKey, PyInstaller app bundle, ad-hoc signed DMG |
@@ -25,6 +25,7 @@
   Swift final-sigma case.
 - Metadata round-trips cover FLAC, MP3, M4A, OGG, Opus, WAV, AIFF, and WavPack.
 - Bitrates are stored and displayed in Kbps; schema v2 migrates pre-existing values.
+- The interface uses Qt Fusion styling and a Qt-drawn menu bar for consistent controls.
 - Imports copy by default or move on request; sources are untouched in copy mode.
 - The import dialog accepts folders or individual files and warns before very large imports.
 - Tag edits update files and DB, verify by re-reading, and support undo/redo.
@@ -39,7 +40,7 @@
 Test status at the time of writing:
 
 ```text
-64 passed, 2 skipped (default suite)
+66 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 
