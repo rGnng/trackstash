@@ -70,13 +70,7 @@ class TrackInfoEditor(QWidget):
         self.revert_button = QPushButton("Revert", self)
         self.revert_button.clicked.connect(self._revert)
         self.pending_label = QLabel("No pending changes", self)
-        self.pending_label.setStyleSheet("color: palette(mid);")
-        save_row = QHBoxLayout()
-        save_row.addWidget(self.save_button)
-        save_row.addWidget(self.revert_button)
-        save_row.addWidget(self.pending_label, 1)
-        layout.addLayout(save_row)
-
+        self.pending_label.setStyleSheet("color: palette(text);")
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -95,10 +89,11 @@ class TrackInfoEditor(QWidget):
         body_layout.addWidget(self.artwork)
         self.artwork_info = QLabel("", body)
         self.artwork_info.setWordWrap(True)
-        self.artwork_info.setStyleSheet("color: palette(mid);")
+        self.artwork_info.setStyleSheet("color: palette(text);")
         body_layout.addWidget(self.artwork_info)
 
         self.lines: dict[str, QLineEdit] = {}
+        self.labels: dict[str, QLabel] = {}
         fields_host = QWidget(body)
         fields_layout = QVBoxLayout(fields_host)
         fields_layout.setContentsMargins(0, 0, 0, 0)
@@ -110,7 +105,8 @@ class TrackInfoEditor(QWidget):
             block_layout.setContentsMargins(0, 0, 0, 0)
             block_layout.setSpacing(1)
             caption = QLabel(label, block)
-            caption.setStyleSheet("color: palette(mid); font-size: 11px;")
+            caption.setStyleSheet("font-size: 11px;")
+            self.labels[key] = caption
             line = QLineEdit(block)
             line.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             line.textEdited.connect(lambda _text, field=key: self._field_changed(field))
@@ -152,6 +148,11 @@ class TrackInfoEditor(QWidget):
 
         scroll.setWidget(body)
         layout.addWidget(scroll, 1)
+        save_row = QHBoxLayout()
+        save_row.addWidget(self.save_button)
+        save_row.addWidget(self.revert_button)
+        save_row.addWidget(self.pending_label, 1)
+        layout.addLayout(save_row)
         self.setEnabled(False)
         self._set_fields_enabled(False)
         self._refresh_dirty()
@@ -244,11 +245,13 @@ class TrackInfoEditor(QWidget):
             self._dirty.clear()
             self._invalid.clear()
             self.pending_label.setText("No pending changes")
-            self.pending_label.setStyleSheet("color: palette(mid);")
+            self.pending_label.setStyleSheet("color: palette(text);")
             self.save_button.setEnabled(False)
             self.revert_button.setEnabled(False)
             for widget in self.lines.values():
                 widget.setStyleSheet("")
+            for label in self.labels.values():
+                label.setStyleSheet("font-size: 11px;")
             return
         current = self.edits()
         invalid = {key for key in NUMERIC_TEXT_FIELDS if not self._field_is_valid(key)}
@@ -272,12 +275,19 @@ class TrackInfoEditor(QWidget):
                     dirty.add(key)
         self._dirty = dirty
         for key, widget in self.lines.items():
+            caption = self.labels.get(key)
             if key in invalid:
-                widget.setStyleSheet("border: 1px solid #D9534F; background-color: #FFF0F0;")
+                widget.setStyleSheet("border: 1px solid #D9534F;")
+                if caption is not None:
+                    caption.setStyleSheet("font-size: 11px; color: #D9534F; font-weight: 600;")
             elif key in dirty:
-                widget.setStyleSheet("border: 1px solid #D99A3D; background-color: #FFF7E6;")
+                widget.setStyleSheet("border: 1px solid #D99A3D;")
+                if caption is not None:
+                    caption.setStyleSheet("font-size: 11px; color: #D99A3D; font-weight: 600;")
             else:
                 widget.setStyleSheet("")
+                if caption is not None:
+                    caption.setStyleSheet("font-size: 11px;")
         if invalid:
             self.pending_label.setText("Track and disc values must be numeric")
             self.pending_label.setStyleSheet("color: #C9302C; font-weight: 600;")
@@ -286,12 +296,12 @@ class TrackInfoEditor(QWidget):
         elif dirty:
             count = len(dirty)
             self.pending_label.setText(f"{count} pending change{'s' if count != 1 else ''}")
-            self.pending_label.setStyleSheet("color: #B7791F; font-weight: 600;")
+            self.pending_label.setStyleSheet("color: #D99A3D; font-weight: 600;")
             self.save_button.setEnabled(True)
             self.revert_button.setEnabled(True)
         else:
             self.pending_label.setText("No pending changes")
-            self.pending_label.setStyleSheet("color: palette(mid);")
+            self.pending_label.setStyleSheet("color: palette(text);")
             self.save_button.setEnabled(False)
             self.revert_button.setEnabled(False)
 
