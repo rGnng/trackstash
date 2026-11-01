@@ -168,6 +168,15 @@ def _template_field(
     return host, edit, default, help_button
 
 
+def _duration_text(seconds: float) -> str:
+    total = max(0, round(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
 def _values_text(value: object) -> str:
     if isinstance(value, (list, tuple)):
         return ", ".join(str(item) for item in value)
@@ -370,7 +379,7 @@ class ImportDialog(QDialog):
         self.common_edits: dict[str, object] = {}
         self._sources: list[str] = []
         self.setWindowTitle(f"Import into {library.name}")
-        self.resize(960, 560)
+        self._restore_size()
         self.setAcceptDrops(True)
 
         layout = QVBoxLayout(self)
@@ -413,10 +422,26 @@ class ImportDialog(QDialog):
         options.addWidget(overrides)
         layout.addLayout(options)
 
-        self.table = QTableWidget(0, 4, self)
-        self.table.setHorizontalHeaderLabels(["Source", "Destination", "Action", "Note"])
+        self.table = QTableWidget(0, 11, self)
+        self.table.setHorizontalHeaderLabels(
+            [
+                "Track #",
+                "Title",
+                "Artist",
+                "Album",
+                "Album Artist",
+                "Format",
+                "Duration",
+                "Source",
+                "Destination",
+                "Action",
+                "Note",
+            ]
+        )
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        for column, width in enumerate((58, 160, 120, 140, 120, 64, 64, 150, 160, 64)):
+            self.table.setColumnWidth(column, width)
         layout.addWidget(self.table, 1)
 
         self.status = QLabel(
@@ -438,6 +463,21 @@ class ImportDialog(QDialog):
 
         if sources:
             QTimer.singleShot(0, lambda: self.set_sources(list(sources)))
+
+    def _restore_size(self) -> None:
+        width, height = 1240, 680
+        saved = self.service.db.get_setting("import_dialog_size", "")
+        try:
+            saved_width, saved_height = (int(part) for part in saved.lower().split("x", 1))
+        except ValueError:
+            pass
+        else:
+            width, height = max(900, saved_width), max(500, saved_height)
+        self.resize(width, height)
+
+    def done(self, result: int) -> None:
+        self.service.db.set_setting("import_dialog_size", f"{self.width()}x{self.height()}")
+        super().done(result)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -546,13 +586,35 @@ class ImportDialog(QDialog):
         self.plan = plan
         self.table.setRowCount(len(plan.items))
         for row, plan_item in enumerate(plan.items):
-            self.table.setItem(row, 0, QTableWidgetItem(str(plan_item.source)))
-            self.table.setItem(row, 1, QTableWidgetItem(str(plan_item.destination)))
-            self.table.setItem(row, 2, QTableWidgetItem(plan_item.action))
+            tags = plan_item.tags
+            track_number = tags.track
+            if track_number and tags.track_total:
+                track_number = f"{track_number}/{tags.track_total}"
+            values = (
+                track_number,
+                tags.title or Path(plan_item.source).stem,
+                tags.primary_artist,
+                tags.album,
+                tags.album_artist_or_primary,
+                plan_item.metadata.format.upper(),
+                _duration_text(plan_item.metadata.duration),
+                plan_item.source.name,
+                plan_item.relative_path,
+                plan_item.action,
+            )
+            tooltips = {
+                7: str(plan_item.source),
+                8: str(plan_item.destination),
+            }
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(value)
+                if column in tooltips:
+                    cell.setToolTip(tooltips[column])
+                self.table.setItem(row, column, cell)
             note = plan_item.warning
             if plan_item.collision:
                 note = (note + " collision resolved").strip()
-            self.table.setItem(row, 3, QTableWidgetItem(note))
+            self.table.setItem(row, 10, QTableWidgetItem(note))
         self.import_button.setEnabled(
             bool(plan.items) and any(item.action != "skip" for item in plan.items)
         )

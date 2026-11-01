@@ -32,19 +32,30 @@
 - Album artwork is loaded asynchronously from embedded tags for visible albums;
   front artwork is preferred and other embedded picture types are used as a
   fallback, so common FLAC files with an untyped picture still show a cover.
-  Albums without artwork show a transparent “No cover artwork” label instead of
-  a colored placeholder tile.
+  Albums without artwork show only a dashed outline instead of a colored
+  placeholder tile or label.
 - The status bar shows library and selection counts without an app-name prefix,
   defaults to visible, and can be disabled in Settings.
 - Track and disc values are stored as text, matching tag semantics.
 - Window size persists between launches.
 - Album grid sorting defaults to date added descending and is configurable in Settings.
+- Album covers use auto-fill sizing: the grid fits the most columns at a 200 px
+  minimum and distributes leftover width evenly. Column count does not shrink
+  just because the library has few albums.
 - Import uses one Add Source control, accepts dragged files/folders, and previews automatically.
 - Strong ordering moves files immediately after path-affecting tag edits; mtime preservation is enabled by default.
-- Pending artwork paste/add/delete is normalized and written on Save; all existing artwork is replaced or removed.
+- Pending artwork paste/add/delete is normalized and written on Save; all existing artwork is replaced or removed. Saved artwork can be copied with Copy Cover or Cmd+C/Ctrl+C.
 - Artwork supports Crop to square, Fit to square, and Original aspect ratio modes.
 - Spin boxes and combo boxes ignore mouse-wheel changes unless focused.
+- Search uses the placeholder `Search`. A single Filter menu groups format
+  choices separately from No Artwork, with a non-clickable divider.
+- Track table and album grid selections use the same palette highlight as the
+  Albums/Tracks switch.
 - The left editor width defaults to 280 px, is user-resizable, and persists between launches.
+- Tracks and album detail keep independent, persisted sort states. Tracks
+  defaults to Added descending; album detail defaults to Track number ascending.
+- The import preview shows track number, title, artist, album, album artist,
+  format, and duration. Its default size is 1240 × 680 and persists after resize.
 - Imports copy by default or move on request; sources are untouched in copy mode.
 - Import destinations follow the organization template from Settings; the template
   field offers a Default reset and a copyable variable reference. Per-import tag
@@ -62,7 +73,7 @@
 Test status at the time of writing:
 
 ```text
-99 passed, 2 skipped (default suite)
+104 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 

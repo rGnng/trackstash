@@ -17,7 +17,7 @@ from PySide6.QtCore import (
     QThreadPool,
     Signal,
 )
-from PySide6.QtGui import QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtGui import QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from trackstash.core.db import AlbumRow, Track
@@ -268,8 +268,11 @@ class AlbumGridModel(QAbstractListModel):
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
-        painter.setPen(QApplication.palette().color(QPalette.ColorRole.PlaceholderText))
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "No cover artwork")
+        pen = QPen(QApplication.palette().color(QPalette.ColorRole.Mid))
+        pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setWidth(1)
+        painter.setPen(pen)
+        painter.drawRect(pixmap.rect().adjusted(1, 1, -2, -2))
         painter.end()
         return QIcon(pixmap)
 

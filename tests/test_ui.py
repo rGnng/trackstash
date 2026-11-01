@@ -55,9 +55,9 @@ def test_main_window_lists_and_filters(qtbot: QtBot, tmp_path: Path, audio_facto
     qtbot.wait(300)
     assert window.model.rowCount() == 0
     window.search_edit.clear()
-    window.format_filter.setCurrentText("MP3")
+    window.format_actions["MP3"].trigger()
     assert window.model.rowCount() == 0
-    window.format_filter.setCurrentText("FLAC")
+    window.format_actions["FLAC"].trigger()
     assert window.model.rowCount() == 1
     assert library.id
 
@@ -75,10 +75,29 @@ def test_import_dialog_preview(qtbot: QtBot, tmp_path: Path, audio_factory: Path
             "artists": ["UI Artist"],
             "album": "UI Album",
             "album_artist": "UI Artist",
+            "track": 4,
+            "track_total": 9,
         },
     )
     dialog = ImportDialog(service, library)
     qtbot.addWidget(dialog)
+    assert dialog.table.columnCount() == 11
+    assert [
+        dialog.table.horizontalHeaderItem(column).text()
+        for column in range(dialog.table.columnCount())
+    ] == [
+        "Track #",
+        "Title",
+        "Artist",
+        "Album",
+        "Album Artist",
+        "Format",
+        "Duration",
+        "Source",
+        "Destination",
+        "Action",
+        "Note",
+    ]
     assert not hasattr(dialog, "template_edit")
     assert not hasattr(dialog, "preview_button")
     assert dialog.source_button.text() == "Add Source…"
@@ -90,6 +109,13 @@ def test_import_dialog_preview(qtbot: QtBot, tmp_path: Path, audio_factory: Path
     assert dialog.table.rowCount() == 1
     assert dialog.import_button.isEnabled()
     assert dialog.plan is not None
+    assert dialog.table.item(0, 0).text() == "4/9"
+    assert dialog.table.item(0, 1).text() == "Second Song"
+    assert dialog.table.item(0, 2).text() == "UI Artist"
+    assert dialog.table.item(0, 3).text() == "UI Album"
+    assert dialog.table.item(0, 4).text() == "UI Artist"
+    assert dialog.table.item(0, 5).text() == "MP3"
+    assert dialog.table.item(0, 6).text() != ""
     assert dialog.plan.items[0].destination == (
         Path(library.path) / "UI Artist" / "UI Album" / "Second Song.mp3"
     )
@@ -109,6 +135,26 @@ def test_import_dialog_auto_previews_constructor_sources(
     assert dialog.plan is not None
     assert dialog.table.rowCount() == 1
     assert dialog.import_button.isEnabled()
+
+
+def test_import_dialog_size_is_larger_and_persisted(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from PySide6.QtWidgets import QDialog
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    service = LibraryService(database)
+    dialog = ImportDialog(service, library)
+    qtbot.addWidget(dialog)
+    assert (dialog.width(), dialog.height()) == (1240, 680)
+
+    dialog.resize(1320, 720)
+    dialog.done(QDialog.DialogCode.Rejected)
+    assert database.get_setting("import_dialog_size") == "1320x720"
+
+    reopened = ImportDialog(service, library)
+    qtbot.addWidget(reopened)
+    assert (reopened.width(), reopened.height()) == (1320, 720)
 
 
 def test_single_track_tag_editor(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
@@ -214,7 +260,7 @@ def test_album_grid_loads_cover_only_on_decoration(
     assert decoration is not None
 
 
-def test_album_grid_no_artwork_placeholder_is_transparent(
+def test_album_grid_no_artwork_placeholder_is_dashed_outline(
     qtbot: QtBot, tmp_path: Path, audio_factory: Path
 ) -> None:
     from PySide6.QtCore import Qt
@@ -228,6 +274,7 @@ def test_album_grid_no_artwork_placeholder_is_transparent(
     assert icon is not None
     image = icon.pixmap(180, 180).toImage()
     assert image.pixelColor(0, 0).alpha() == 0
+    assert image.pixelColor(90, 90).alpha() == 0
     opaque = sum(
         1 for x in range(0, 180, 2) for y in range(0, 180, 2) if image.pixelColor(x, y).alpha()
     )
@@ -319,15 +366,57 @@ def test_album_grid_fills_viewport_with_fixed_gaps(
         ]
     )
 
+    from trackstash.ui.main_window import album_cover_layout
+
+    assert album_cover_layout(1000) == (4, 216)
+    assert album_cover_layout(1100) == (4, 241)
+    assert album_cover_layout(1200) == (5, 207)
+    assert album_cover_layout(1440) == (6, 208)
+    assert album_cover_layout(1145) == (4, 252)
+
     window._update_album_grid(1000)
-    assert window.album_view.iconSize().width() == 213
+    assert window.album_view.iconSize().width() == 216
     assert window.album_view.spacing() == 22
 
     window._update_album_grid(1100)
-    assert window.album_view.iconSize().width() == 238
+    assert window.album_view.iconSize().width() == 241
 
     window._update_album_grid(1200)
-    assert window.album_view.iconSize().width() == 204
+    assert window.album_view.iconSize().width() == 207
+
+
+def test_album_grid_cover_size_does_not_depend_on_album_count(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from trackstash.core.db import AlbumRow
+
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    rows = [
+        AlbumRow(f"album-{index}", f"Album {index}", "Artist", "2024", 1, None, "")
+        for index in range(20)
+    ]
+
+    window.album_model.set_albums(rows[:3])
+    window._update_album_grid(1145)
+    few = window.album_view.iconSize().width()
+
+    window.album_model.set_albums(rows)
+    window._update_album_grid(1145)
+    many = window.album_view.iconSize().width()
+
+    assert few == many == 252
+
+
+def test_album_context_menu_keeps_only_edit_and_delete(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    menu = window._album_menu()
+    assert [action.text() for action in menu.actions()] == ["Edit Tags", "Delete"]
 
 
 def test_album_grid_does_not_show_year(qtbot: QtBot) -> None:
@@ -348,12 +437,29 @@ def test_qt_top_bar_replaces_menu(qtbot: QtBot, tmp_path: Path) -> None:
     qtbot.addWidget(window)
     assert window.menuBar().actions() == []
     assert not window.menuBar().isVisible()
-    assert window.view_label.text() == "View"
+    assert not hasattr(window, "view_label")
     assert window.albums_view_button.text() == "Albums"
     assert window.tracks_view_button.text() == "Tracks"
     assert window.import_button.text() == "Import…"
-    assert window.format_filter.currentText() == "All formats"
-    assert window.missing_artwork_button.text() == "No artwork"
+    assert window.search_edit.placeholderText() == "Search"
+    assert window.filter_button.text() == "Filter"
+    assert not hasattr(window, "format_filter")
+    assert not hasattr(window, "missing_artwork_button")
+    filter_actions = window.filter_button.menu().actions()
+    assert [action.text() for action in filter_actions[:10]] == [
+        "All Formats",
+        "FLAC",
+        "MP3",
+        "M4A",
+        "OGG",
+        "OPUS",
+        "APE",
+        "WV",
+        "WAV",
+        "AIFF",
+    ]
+    assert filter_actions[10].isSeparator()
+    assert filter_actions[11].text() == "No Artwork"
     assert window.settings_button.toolTip() == "Settings…"
     assert window.refresh_button.toolTip() == "Refresh (Ctrl+R)"
     assert not hasattr(window, "filters_button")
@@ -666,6 +772,57 @@ def test_inline_save_and_table_sorting(
     assert window.model.rowCount() >= 1
 
 
+def test_tracks_and_album_detail_sorts_are_independent(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from PySide6.QtCore import Qt
+
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.tracks_view_button.click()
+    header = window.table.horizontalHeader()
+
+    assert header.sortIndicatorSection() == window._column_index("added")
+    assert header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+
+    window.tabs.setCurrentIndex(1)
+    window.refresh_albums()
+    window._album_activated(window.album_model.index(0, 0))
+    assert window._album_filter_id is not None
+    assert header.sortIndicatorSection() == window._column_index("track")
+    assert header.sortIndicatorOrder() == Qt.SortOrder.AscendingOrder
+
+    window.table.sortByColumn(window._column_index("title"), Qt.SortOrder.DescendingOrder)
+    assert database.get_setting("album_tracks_sort_field") == "title"
+    assert database.get_setting("album_tracks_sort_order") == "desc"
+
+    window.clear_album_filter()
+    assert window._album_filter_id is None
+    assert header.sortIndicatorSection() == window._column_index("added")
+    assert header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+
+    window.table.sortByColumn(window._column_index("artist"), Qt.SortOrder.AscendingOrder)
+    assert database.get_setting("tracks_sort_field") == "artist"
+    assert database.get_setting("tracks_sort_order") == "asc"
+
+    reopened = MainWindow(database)
+    qtbot.addWidget(reopened)
+    reopened.show()
+    reopened.refresh_libraries()
+    reopened_header = reopened.table.horizontalHeader()
+    assert reopened_header.sortIndicatorSection() == reopened._column_index("artist")
+    assert reopened_header.sortIndicatorOrder() == Qt.SortOrder.AscendingOrder
+
+    reopened.tabs.setCurrentIndex(1)
+    reopened.refresh_albums()
+    reopened._album_activated(reopened.album_model.index(0, 0))
+    assert reopened_header.sortIndicatorSection() == reopened._column_index("title")
+    assert reopened_header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+
+
 def test_album_multi_selection(
     qtbot: QtBot, tmp_path: Path, audio_factory: Path, monkeypatch
 ) -> None:
@@ -798,6 +955,40 @@ def test_artwork_paste_is_applied_on_save(
     window.save_inline_edits({})
     assert database.get_track(track.id).has_artwork is False
     assert read_artwork(refreshed.path) == []
+    QApplication.clipboard().clear()
+
+
+def test_editor_copies_artwork_to_clipboard(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    service = LibraryService(database)
+    track = database.list_tracks(library_id=library.id)[0]
+    cover = BytesIO()
+    Image.new("RGB", (36, 24), (30, 90, 160)).save(cover, "JPEG")
+    service.set_artwork([track.id], cover.getvalue(), mime="image/jpeg")
+
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.tracks_view_button.click()
+    window.table.selectRow(0)
+    assert not window.editor._artwork_pixmap.isNull()
+
+    QApplication.clipboard().clear()
+    window.editor.artwork.setFocus()
+    QTest.keyClick(window.editor.artwork, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    copied = QApplication.clipboard().image()
+    assert not copied.isNull()
+    assert copied.size() == window.editor._artwork_pixmap.size()
     QApplication.clipboard().clear()
 
 

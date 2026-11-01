@@ -19,6 +19,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QAction,
+    QActionGroup,
     QCloseEvent,
     QDesktopServices,
     QIcon,
@@ -66,14 +67,28 @@ from trackstash.ui.dialogs import (
 )
 from trackstash.ui.editor import TrackInfoEditor
 from trackstash.ui.models import COLUMNS, AlbumGridModel, TrackTableModel
-from trackstash.ui.widgets import NoWheelComboBox
 
 COLUMN_CONFIG_VERSION = 2
-ALBUM_MIN_COVER = 158
-ALBUM_MAX_COVER = 240
+ALBUM_MIN_COVER = 200
+ALBUM_MAX_COVER = 320
 ALBUM_SPACING = 22
 ALBUM_ITEM_MARGIN = 6
-ALBUM_COVER_SAFETY = 2
+
+
+def album_cover_layout(width: int) -> tuple[int, int]:
+    """Return the album grid column count and cover size for a viewport width.
+
+    This mirrors the auto-fill algorithm used by the sibling Tracks and
+    WebTracks album grids: fit the maximum number of columns at the minimum
+    cover size, then distribute the remaining width evenly. The album count is
+    deliberately not part of the calculation, so covers keep a stable size
+    instead of growing when a library has only a few albums.
+    """
+    width = max(1, int(width)) - 2 * ALBUM_SPACING
+    pitch = ALBUM_MIN_COVER + ALBUM_ITEM_MARGIN + ALBUM_SPACING
+    columns = max(1, (width + ALBUM_SPACING) // pitch)
+    cover = (width + ALBUM_SPACING) // columns - ALBUM_ITEM_MARGIN - ALBUM_SPACING
+    return columns, max(1, min(ALBUM_MAX_COVER, cover))
 
 
 class AlbumGridView(QListView):
@@ -147,6 +162,15 @@ class MainWindow(QMainWindow):
         self.service.artwork_aspect = artwork_aspect
         self._album_sort = db.get_setting("album_sort_field", "date_added")
         self._album_sort_desc = db.get_setting("album_sort_order", "desc") != "asc"
+        self._format_filter = ""
+        self._missing_artwork_only = False
+        self._track_sort_state: dict[str, tuple[str, Qt.SortOrder]] = {
+            "tracks": self._load_track_sort("tracks_sort", "added", "desc"),
+            "album": self._load_track_sort("album_tracks_sort", "track", "asc"),
+        }
+        self._applied_track_sort: str | None = None
+        self._loading_track_sort = False
+        self._track_sort_ready = False
         self._status_bar_visible = db.get_setting("status_bar_visible", "1") != "0"
         try:
             self._editor_width = int(db.get_setting("editor_width", "280") or 280)
@@ -304,8 +328,6 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(4)
 
         library_row = QHBoxLayout()
-        self.view_label = QLabel("View", right)
-        library_row.addWidget(self.view_label)
         view_switch = QWidget(right)
         view_switch_layout = QHBoxLayout(view_switch)
         view_switch_layout.setContentsMargins(0, 0, 0, 0)
@@ -344,26 +366,47 @@ class MainWindow(QMainWindow):
         library_row.addWidget(view_switch)
         library_row.addSpacing(10)
         self.search_edit = QLineEdit(right)
-        self.search_edit.setPlaceholderText("Search title, artist, album, genre, path…")
+        self.search_edit.setPlaceholderText("Search")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.setFixedSize(180, 28)
         self.search_edit.textChanged.connect(self._search_changed)
         library_row.addWidget(self.search_edit)
 
-        self.format_filter = NoWheelComboBox(right)
-        self.format_filter.addItem("All formats", "")
-        for extension in ("FLAC", "MP3", "M4A", "OGG", "OPUS", "APE", "WV", "WAV", "AIFF"):
-            self.format_filter.addItem(extension, extension)
-        self.format_filter.setFixedSize(112, 28)
-        self.format_filter.currentIndexChanged.connect(self._filters_changed)
-        library_row.addWidget(self.format_filter)
-        self.missing_artwork_button = QToolButton(right)
-        self.missing_artwork_button.setText("No artwork")
-        self.missing_artwork_button.setToolTip("Show only tracks that have no artwork")
-        self.missing_artwork_button.setCheckable(True)
-        self.missing_artwork_button.setFixedHeight(28)
-        self.missing_artwork_button.toggled.connect(self._filters_changed)
-        library_row.addWidget(self.missing_artwork_button)
+        self.filter_button = QToolButton(right)
+        self.filter_button.setText("Filter")
+        self.filter_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.filter_button.setFixedSize(90, 28)
+        filter_menu = QMenu(self.filter_button)
+        format_group = QActionGroup(filter_menu)
+        format_group.setExclusive(True)
+        self.format_actions: dict[str, QAction] = {}
+        for label, value in (
+            ("All Formats", ""),
+            ("FLAC", "FLAC"),
+            ("MP3", "MP3"),
+            ("M4A", "M4A"),
+            ("OGG", "OGG"),
+            ("OPUS", "OPUS"),
+            ("APE", "APE"),
+            ("WV", "WV"),
+            ("WAV", "WAV"),
+            ("AIFF", "AIFF"),
+        ):
+            action = filter_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(value == "")
+            action.triggered.connect(
+                lambda _checked=False, selected=value: self._set_format_filter(selected)
+            )
+            format_group.addAction(action)
+            self.format_actions[value] = action
+        filter_menu.addSeparator()
+        self.no_artwork_action = filter_menu.addAction("No Artwork")
+        self.no_artwork_action.setCheckable(True)
+        self.no_artwork_action.toggled.connect(self._set_no_artwork_filter)
+        self.filter_button.setMenu(filter_menu)
+        self._update_filter_button()
+        library_row.addWidget(self.filter_button)
         library_row.addStretch(1)
 
         self.refresh_button = QToolButton(right)
@@ -416,6 +459,12 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setSortingEnabled(True)
         self.table.setAlternatingRowColors(True)
+        self.table.setStyleSheet(
+            "QTableView { selection-background-color: palette(highlight);"
+            " selection-color: palette(highlighted-text); }"
+            "QTableView::item:selected { background-color: palette(highlight);"
+            " color: palette(highlighted-text); }"
+        )
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
         header.setSectionsMovable(True)
@@ -441,6 +490,12 @@ class MainWindow(QMainWindow):
         self.album_view.setModel(self.album_model)
         self.album_view.setFrameShape(QFrame.Shape.NoFrame)
         self.album_view.setLineWidth(0)
+        self.album_view.setStyleSheet(
+            "QListView { selection-background-color: palette(highlight);"
+            " selection-color: palette(highlighted-text); }"
+            "QListView::item:selected { background-color: palette(highlight);"
+            " color: palette(highlighted-text); }"
+        )
         self.album_view.setViewMode(QListView.ViewMode.IconMode)
         self.album_view.setResizeMode(QListView.ResizeMode.Adjust)
         self.album_view.setMovement(QListView.Movement.Static)
@@ -473,10 +528,33 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(outer)
 
         self._load_column_config()
+        self.table.horizontalHeader().sortIndicatorChanged.connect(self._track_sort_changed)
+        self._track_sort_ready = True
+        self._apply_track_sort()
         self.tabs.setCurrentIndex(1)
 
     def _filters_changed(self, *_args: object) -> None:
         self.refresh_tracks()
+
+    def _set_format_filter(self, value: str) -> None:
+        self._format_filter = value
+        self._update_filter_button()
+        self._filters_changed()
+
+    def _set_no_artwork_filter(self, checked: bool) -> None:
+        self._missing_artwork_only = checked
+        self._update_filter_button()
+        self._filters_changed()
+
+    def _update_filter_button(self) -> None:
+        active: list[str] = []
+        if self._format_filter:
+            active.append(self._format_filter)
+        if self._missing_artwork_only:
+            active.append("No Artwork")
+        self.filter_button.setToolTip(
+            f"Filter: {' · '.join(active)}" if active else "Filter by format or missing artwork"
+        )
 
     def _create_status_bar(self) -> None:
         self.status_summary = QLabel("", self)
@@ -547,7 +625,43 @@ class MainWindow(QMainWindow):
             return
         self._search_timer.start()
 
+    def _track_sort_context(self) -> str:
+        return "album" if self._album_filter_id is not None else "tracks"
+
+    def _apply_track_sort(self) -> None:
+        if not hasattr(self, "table"):
+            return
+        context = self._track_sort_context()
+        if context == self._applied_track_sort:
+            return
+        field, order = self._track_sort_state[context]
+        column = self._column_index(field)
+        if column < 0:
+            return
+        self._loading_track_sort = True
+        try:
+            self.table.sortByColumn(column, order)
+        finally:
+            self._loading_track_sort = False
+        self._applied_track_sort = context
+
+    def _track_sort_changed(self, column: int, order: Qt.SortOrder) -> None:
+        if not self._track_sort_ready or self._loading_track_sort:
+            return
+        if not 0 <= column < len(COLUMNS):
+            return
+        context = self._track_sort_context()
+        field = COLUMNS[column][1]
+        self._track_sort_state[context] = (field, order)
+        prefix = "tracks_sort" if context == "tracks" else "album_tracks_sort"
+        self.db.set_setting(f"{prefix}_field", field)
+        self.db.set_setting(
+            f"{prefix}_order",
+            "asc" if order == Qt.SortOrder.AscendingOrder else "desc",
+        )
+
     def refresh_tracks(self) -> None:
+        self._apply_track_sort()
         query = self.search_edit.text().strip() if hasattr(self, "search_edit") else ""
         if not self._current_library_id:
             self.model.set_tracks([])
@@ -565,10 +679,9 @@ class MainWindow(QMainWindow):
             album_id=self._album_filter_id,
             query=query,
         )
-        format_value = str(self.format_filter.currentData() or "")
-        if format_value:
-            tracks = [track for track in tracks if track.format.upper() == format_value]
-        if self.missing_artwork_button.isChecked():
+        if self._format_filter:
+            tracks = [track for track in tracks if track.format.upper() == self._format_filter]
+        if self._missing_artwork_only:
             tracks = [track for track in tracks if not self._track_has_artwork(track)]
         self.model.set_tracks(tracks)
         library = self.db.get_library(self._current_library_id)
@@ -615,17 +728,8 @@ class MainWindow(QMainWindow):
     def _update_album_grid(self, width: int | None = None) -> None:
         if not hasattr(self, "album_view"):
             return
-        available = width if width is not None else self.album_view.viewport().width()
-        available = max(1, available - ALBUM_SPACING - ALBUM_ITEM_MARGIN)
-        gap = ALBUM_ITEM_MARGIN + ALBUM_SPACING + ALBUM_COVER_SAFETY
-        min_pitch = ALBUM_MIN_COVER + gap
-        max_pitch = ALBUM_MAX_COVER + gap
-        # Use the fewest columns that keep covers at or below the maximum, so
-        # covers grow with the window before another column is added.
-        columns = max(1, (available + max_pitch - 1) // max_pitch)
-        columns = min(columns, max(1, available // min_pitch))
-        columns = min(columns, max(1, self.album_model.rowCount()))
-        cover = max(1, min(ALBUM_MAX_COVER, available // columns - gap))
+        width = width if width is not None else self.album_view.viewport().width()
+        _, cover = album_cover_layout(width)
         self.album_model.set_cover_size(cover)
         self.album_view.setIconSize(QSize(cover, cover))
         self.album_view.doItemsLayout()
@@ -641,20 +745,16 @@ class MainWindow(QMainWindow):
                 index,
                 QItemSelectionModel.SelectionFlag.ClearAndSelect,
             )
+        menu = self._album_menu()
+        menu.exec(self.album_view.viewport().mapToGlobal(position))
+
+    def _album_menu(self) -> QMenu:
         menu = QMenu(self)
-        edit = menu.addAction("Edit Tags for Selected Albums…")
-        auto = menu.addAction("Auto-number Tracks…")
-        organize = menu.addAction("Organize…")
-        delete = menu.addAction("Delete…")
-        chosen = menu.exec(self.album_view.viewport().mapToGlobal(position))
-        if chosen == edit:
-            self.edit_tags()
-        elif chosen == auto:
-            self.auto_number_tracks()
-        elif chosen == organize:
-            self.organize()
-        elif chosen == delete:
-            self.delete_tracks()
+        edit = menu.addAction("Edit Tags")
+        edit.triggered.connect(self.edit_tags)
+        delete = menu.addAction("Delete")
+        delete.triggered.connect(self.delete_tracks)
+        return menu
 
     def _album_activated(self, index: QModelIndex) -> None:
         album = self.album_model.album_at(index.row())
@@ -1237,6 +1337,18 @@ class MainWindow(QMainWindow):
             if column_key == key:
                 return index
         return -1
+
+    def _load_track_sort(
+        self, prefix: str, default_field: str, default_order: str
+    ) -> tuple[str, Qt.SortOrder]:
+        fields = {key for _, key in COLUMNS}
+        field = self.db.get_setting(f"{prefix}_field", default_field)
+        if field not in fields:
+            field = default_field
+        order = self.db.get_setting(f"{prefix}_order", default_order)
+        return field, (
+            Qt.SortOrder.AscendingOrder if order == "asc" else Qt.SortOrder.DescendingOrder
+        )
 
     def _apply_column_config(self) -> None:
         if not hasattr(self, "table"):

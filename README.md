@@ -22,11 +22,15 @@ consistent without cloud dependencies.
 - **Track context menu.** Edit Tags, Go to Album, Open, Open with, Delete, and
   Show in Finder.
 - **Tracks and Albums views.** The app opens on the album grid; a compact
-  `View` switch in the top bar toggles between Albums and Tracks. The track
+  Albums/Tracks switch in the top bar toggles between them. The track
   table is sortable with movable/resizable columns (`Title`, `Format`, `Codec`,
-  `Bitrate` in Kbps, and more). Album covers resize within a fixed-gap grid to
-  fill the viewport; the grid sorts by date added descending by default and the
-  sort field/order is configurable in Settings. Double-click an album to filter
+  `Bitrate` in Kbps, and more). The Search field has a single `Filter` menu:
+  one group selects an audio format and a separated group toggles No Artwork.
+  The Tracks view defaults to Added descending;
+  album detail defaults to Track number ascending. Each sort is remembered
+  independently. Album covers resize within a fixed-gap grid to fill the
+  viewport; the grid sorts by date added descending by default and the sort
+  field/order is configurable in Settings. Double-click an album to filter
   tracks; select multiple albums for batch editing. `Cmd+[` / `Ctrl+[` returns
   from a filtered album to the Albums grid.
 - **Consistent Qt interface.** The app uses Qt's Fusion style and a menu-less
@@ -45,12 +49,12 @@ consistent without cloud dependencies.
 - **Tag editing.** Edit directly in the left media editor; changed fields are
   highlighted and counted, and Save opens a preview before writing. Multi-track
   selections show shared values and italic `Multiple` placeholders, so one field
-  can be applied to the whole selection. Batch edits and per-disc auto-numbering
-  are also available from the track and album context menus.
-- **Artwork.** View, embed, replace, remove, and extract front-cover artwork.
-  Covers are read from embedded tags on demand for visible albums; there is no
-  disk cover cache. New artwork is normalized to JPEG with Crop to square,
-  Fit to square, or Original aspect ratio modes.
+  can be applied to the whole selection. Batch edits are available from the
+  track and album context menus.
+- **Artwork.** View, copy, embed, replace, remove, and extract front-cover
+  artwork. Covers are read from embedded tags on demand for visible albums;
+  there is no disk cover cache. New artwork is normalized to JPEG with Crop to
+  square, Fit to square, or Original aspect ratio modes.
 - **Organization.** Rename and move files with a token template, live preview,
   collision detection, UUID remapping, and journaling. Strong ordering is on by
   default: tag changes that affect the destination move the file immediately.
@@ -59,7 +63,8 @@ consistent without cloud dependencies.
   changed in Settings.
 - **Import.** A single Add Source control supports files or folders, accepts
   drag-and-drop into the import window, and previews automatically as soon as a
-  source is chosen.
+  source is chosen. The preview shows track number, title, artist, album, album
+  artist, format, and duration before import; the dialog remembers its size.
 - **Library maintenance.** Quick and full scans, changed-file refresh, missing
   file review, duplicate review, and index-only or system-Trash deletion. The
   Settings → Library tab manages libraries, database backup, and duplicate review;

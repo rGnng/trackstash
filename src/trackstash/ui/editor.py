@@ -233,6 +233,11 @@ class TrackInfoEditor(QWidget):
         if data:
             self.set_pending_artwork(data)
 
+    def _copy_artwork(self) -> None:
+        if self._artwork_pixmap.isNull():
+            return
+        QApplication.clipboard().setPixmap(self._artwork_pixmap)
+
     def set_pending_artwork(self, data: bytes) -> None:
         pixmap = QPixmap()
         if not data or not pixmap.loadFromData(data):
@@ -274,12 +279,17 @@ class TrackInfoEditor(QWidget):
 
     def _show_artwork_menu(self, position: QPoint) -> None:
         menu = QMenu(self.artwork)
+        copy = menu.addAction("Copy Cover")
+        copy.setEnabled(self._has_artwork)
+        menu.addSeparator()
         add = menu.addAction("Add…")
         paste = menu.addAction("Paste")
         delete = menu.addAction("Delete")
         delete.setEnabled(self._has_artwork)
         chosen = menu.exec(position)
-        if chosen is add:
+        if chosen is copy:
+            self._copy_artwork()
+        elif chosen is add:
             self.cover_requested.emit()
         elif chosen is paste:
             self._paste_artwork()
@@ -304,6 +314,9 @@ class TrackInfoEditor(QWidget):
             elif isinstance(event, QKeyEvent):
                 if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                     self._set_pending_artwork_removal()
+                    return True
+                if event.matches(QKeySequence.StandardKey.Copy):
+                    self._copy_artwork()
                     return True
                 if event.matches(QKeySequence.StandardKey.Paste):
                     self._paste_artwork()

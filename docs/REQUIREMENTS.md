@@ -545,10 +545,17 @@ Unsupported files are never modified.
 ## 9. UX outline
 
 - **Single library:** the active library is managed from Settings → Library and remembered between launches; there is no aggregate All Tracks view or library dropdown in the main window.
-- **Right pane:** virtualized track table or album grid with search, format, and
-  missing-artwork filters. Track columns can be reordered, auto-fitted, and
-  shown/hidden; the layout is persisted and configurable in Settings. Album
-  covers resize within fixed column/row gaps to fill the viewport. The album
+- **Right pane:** virtualized track table or album grid with a `Search` field and
+  a single `Filter` menu. The menu groups format choices in the first section and
+  No Artwork in a second section, separated by a non-clickable divider. Track
+  columns can be reordered, auto-fitted, and
+  shown/hidden; the layout is persisted and configurable in Settings. The
+  Tracks view and the album detail table keep independent sort fields and
+  directions: Tracks defaults to Added descending, album detail defaults to
+  Track number ascending, and both persist between launches. Album
+  covers resize within fixed column/row gaps to fill the viewport. Cover sizing
+  uses auto-fill: fit the most columns at a 200 px minimum, then distribute the
+  remaining width evenly; a small album count does not inflate covers. The album
   grid sorts by date added descending by default; field and order are
   configurable in Settings.
 - **Status bar:** shows the active library, track count, and selection count,
@@ -564,12 +571,14 @@ Unsupported files are never modified.
 - **Media editor (left):** selectable artwork, editable canonical tags,
   pending-change highlighting, and a fixed Save/Revert row. Multi-selection shows
   shared values and italic `Multiple` placeholders for mixed fields. Save opens a
-  tag diff preview before writing. Artwork can be pasted from the clipboard, added
+  tag diff preview before writing. Artwork can be copied to the clipboard with
+  the Copy Cover context action or Cmd+C/Ctrl+C, pasted from the clipboard, added
   from an image file, or deleted with Delete/Backspace; a selected artwork area
-  supports Add/Paste/Delete in its context menu. Pending artwork is normalized
-  and embedded on Save, replacing all existing artwork.
-- **Action bar:** no main menu bar. Import, refresh, format, artwork
-  filtering, view switching, and Settings live in the top bar.
+  supports Copy/Add/Paste/Delete in its context menu. Pending artwork is
+  normalized and embedded on Save, replacing all existing artwork.
+- **Action bar:** no main menu bar. Import, refresh, filtering, view switching,
+  and Settings live in the top bar. The Albums/Tracks switch has no separate
+  “View” label.
 - **Import:** a top-bar Import… button. Library identity, scans, adding libraries,
   relocation, ReKey, enable/disable, removal, Find Duplicates, and database backup
   live directly in the Settings → Library panel. Selection-specific actions stay
@@ -582,7 +591,9 @@ Unsupported files are never modified.
   Show in Finder.
 - **Import wizard:** source picker, tag preview/edit, copy or move mode, destination
   preview using the organization template from Settings, collision and duplicate
-  handling, and per-file progress.
+  handling, and per-file progress. The preview table shows track number, title,
+  artist, album, album artist, format, and duration; the dialog remembers its
+  window size.
 - **Batch editor:** tri-state fields, mixed-value indicators, transform actions,
   auto-numbering, and a diff preview before saving.
 - **Preview dialog:** per-file before/after values, path changes, old and new
@@ -660,8 +671,8 @@ TrackStash is a native desktop application built with Python 3.12+ and PySide6
   first track only when the album enters the viewport, then cached in memory with
   a bounded LRU. Front-cover artwork is preferred; when a file only has embedded
   artwork tagged with another picture type, the first available image is used as
-  the album cover. Albums without artwork show a transparent “No cover artwork”
-  label instead of a colored placeholder tile. No cover files are written to disk; `ts_artwork` tracks
+  the album cover. Albums without artwork show only a dashed outline instead of a
+  colored placeholder tile or label. No cover files are written to disk; `ts_artwork` tracks
   per-track embedded artwork metadata and `albums.artwork` stays `NULL`. New
   artwork is normalized to JPEG (default 1000 px long edge, quality 90) with Crop
   to square, Fit to square, or Original aspect ratio before embedding.
