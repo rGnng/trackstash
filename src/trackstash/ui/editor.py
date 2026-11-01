@@ -274,18 +274,16 @@ class TrackInfoEditor(QWidget):
 
     def _show_artwork_menu(self, position: QPoint) -> None:
         menu = QMenu(self.artwork)
-        add_or_replace = menu.addAction("Replace Artwork…" if self._has_artwork else "Add Artwork…")
-        paste = menu.addAction("Paste Artwork")
-        delete = None
-        if self._has_artwork:
-            menu.addSeparator()
-            delete = menu.addAction("Delete Artwork")
+        add = menu.addAction("Add…")
+        paste = menu.addAction("Paste")
+        delete = menu.addAction("Delete")
+        delete.setEnabled(self._has_artwork)
         chosen = menu.exec(position)
-        if chosen is add_or_replace:
+        if chosen is add:
             self.cover_requested.emit()
         elif chosen is paste:
             self._paste_artwork()
-        elif delete is not None and chosen is delete:
+        elif chosen is delete:
             self._set_pending_artwork_removal()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
