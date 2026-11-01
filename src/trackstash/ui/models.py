@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections import OrderedDict
 from datetime import datetime
 
@@ -16,7 +17,8 @@ from PySide6.QtCore import (
     QThreadPool,
     Signal,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtWidgets import QApplication
 
 from trackstash.core.db import AlbumRow, Track
 from trackstash.core.metadata import read_artwork
@@ -155,10 +157,11 @@ class _CoverSignals(QObject):
 
 
 class _CoverTask(QRunnable):
-    def __init__(self, key: str, path: str, signals: _CoverSignals) -> None:
+    def __init__(self, key: str, path: str, checksum: str, signals: _CoverSignals) -> None:
         super().__init__()
         self.key = key
         self.path = path
+        self.checksum = checksum
         self.signals = signals
 
     def _emit(self, name: str, *args: object) -> None:
@@ -171,8 +174,24 @@ class _CoverTask(QRunnable):
     def run(self) -> None:
         try:
             artworks = read_artwork(self.path)
-            if artworks and artworks[0].data:
-                self._emit("loaded", self.key, artworks[0].data)
+            if not artworks:
+                self._emit("failed", self.key)
+                return
+            artwork = next(
+                (
+                    item
+                    for item in artworks
+                    if self.checksum and hashlib.sha256(item.data).hexdigest() == self.checksum
+                ),
+                None,
+            )
+            if artwork is None:
+                artwork = next(
+                    (item for item in artworks if item.kind == "front"),
+                    artworks[0],
+                )
+            if artwork.data:
+                self._emit("loaded", self.key, artwork.data)
             else:
                 self._emit("failed", self.key)
         except Exception:
@@ -244,17 +263,13 @@ class AlbumGridModel(QAbstractListModel):
         while len(self._icons) > 256:
             self._icons.popitem(last=False)
 
-    def _placeholder_icon(self, album: AlbumRow) -> QIcon:
+    def _placeholder_icon(self) -> QIcon:
         size = self._cover_size
         pixmap = QPixmap(size, size)
-        color = QColor.fromHsv(abs(hash(album.id)) % 360, 90, 120)
-        pixmap.fill(color)
+        pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
-        painter.setPen(QColor("#F5F7FA"))
-        font = painter.font()
-        font.setPointSize(max(10, int(size * 0.23)))
-        painter.setFont(font)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "♪")
+        painter.setPen(QApplication.palette().color(QPalette.ColorRole.PlaceholderText))
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "No cover artwork")
         painter.end()
         return QIcon(pixmap)
 
@@ -264,11 +279,18 @@ class AlbumGridModel(QAbstractListModel):
         if cached is not None:
             self._icons.move_to_end(key)
             return cached
-        icon = self._placeholder_icon(album)
+        icon = self._placeholder_icon()
         self._store_icon(key, icon)
         if album.artwork_song_path and key not in self._pending:
             self._pending.add(key)
-            self._cover_pool.start(_CoverTask(key, album.artwork_song_path, self._cover_signals))
+            self._cover_pool.start(
+                _CoverTask(
+                    key,
+                    album.artwork_song_path,
+                    album.artwork_checksum,
+                    self._cover_signals,
+                )
+            )
         return icon
 
     def _cover_loaded(self, key: str, data: bytes) -> None:

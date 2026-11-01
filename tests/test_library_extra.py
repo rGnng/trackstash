@@ -181,6 +181,37 @@ def test_replacing_artwork_removes_all_existing_pictures(setup: tuple) -> None:
     assert len(read_artwork(path)) == 1
 
 
+def test_album_cover_falls_back_to_other_artwork_type(setup: tuple) -> None:
+    from io import BytesIO
+
+    from mutagen.flac import FLAC, Picture
+    from PIL import Image
+
+    database, _, library = setup
+    track = database.list_tracks(library_id=library.id)[0]
+    path = Path(track.path)
+    audio = FLAC(path)
+    audio.clear_pictures()
+    buffer = BytesIO()
+    Image.new("RGB", (32, 32), (80, 40, 120)).save(buffer, "JPEG")
+    picture = Picture()
+    picture.type = 0
+    picture.mime = "image/jpeg"
+    picture.width = 32
+    picture.height = 32
+    picture.data = buffer.getvalue()
+    audio.add_picture(picture)
+    audio.save()
+
+    database.upsert_tracks([read_metadata(path)], library)
+    refreshed = database.get_track(track.id)
+    assert refreshed is not None
+    assert refreshed.has_artwork is True
+    albums = database.list_albums(library.id)
+    assert albums[0].artwork_song_path == refreshed.path
+    assert albums[0].artwork_checksum == refreshed.artwork_checksum
+
+
 def test_artwork_embed_extract_remove(setup: tuple, tmp_path: Path) -> None:
     from io import BytesIO
 

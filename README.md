@@ -16,9 +16,9 @@ consistent without cloud dependencies.
 - **Managed library.** One current library at a time. Settings → Library embeds
   the library selector and identity panel plus adding, Quick/Full Scan,
   relocation, ReKey, enable/disable, and index removal. Imports copy by default
-  or move on request from the top-bar Import… button, with destinations following
-  the organization template configured in Settings; tag overrides can be applied
-  per import.
+  or move on request from the top-bar Import… button. Destinations follow the
+  organization template in Settings, which includes a Default reset and a
+  copyable variable reference; tag overrides can be applied per import.
 - **Track context menu.** Edit Tags, Go to Album, Open, Open with, Delete, and
   Show in Finder.
 - **Tracks and Albums views.** The app opens on the album grid; a compact
@@ -61,7 +61,9 @@ consistent without cloud dependencies.
   drag-and-drop into the import window, and previews automatically as soon as a
   source is chosen.
 - **Library maintenance.** Quick and full scans, changed-file refresh, missing
-  file review, duplicate review, and index-only or system-Trash deletion.
+  file review, duplicate review, and index-only or system-Trash deletion. The
+  Settings → Library tab manages libraries, database backup, and duplicate review;
+  selection-specific actions remain in the main window.
 - **Local-first.** No online metadata lookup, telemetry, accounts, or cloud
   services. No playback or preview in v1.
 

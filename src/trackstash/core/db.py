@@ -1070,8 +1070,10 @@ class Database:
         LEFT JOIN ts_song_tags t ON t.song_id = s.id
         LEFT JOIN ts_audio_properties p ON p.song_id = s.id
         LEFT JOIN ts_artwork a ON a.id = (
-            SELECT MIN(id) FROM ts_artwork
-            WHERE song_id = s.id AND kind = 'front'
+            SELECT id FROM ts_artwork
+            WHERE song_id = s.id
+            ORDER BY CASE WHEN kind = 'front' THEN 0 ELSE 1 END, id
+            LIMIT 1
         )
     """
 
@@ -1179,11 +1181,13 @@ class Database:
             " COUNT(s.id) AS track_count,"
             " (SELECT s2.path FROM ts_artwork a"
             "  JOIN songs s2 ON s2.id = a.song_id"
-            "  WHERE s2.album_id = al.id AND a.kind = 'front'"
+            "  WHERE s2.album_id = al.id"
+            "  ORDER BY CASE WHEN a.kind = 'front' THEN 0 ELSE 1 END, a.id"
             "  LIMIT 1) AS artwork_song_path,"
             " (SELECT a.checksum FROM ts_artwork a"
             "  JOIN songs s2 ON s2.id = a.song_id"
-            "  WHERE s2.album_id = al.id AND a.kind = 'front'"
+            "  WHERE s2.album_id = al.id"
+            "  ORDER BY CASE WHEN a.kind = 'front' THEN 0 ELSE 1 END, a.id"
             "  LIMIT 1) AS artwork_checksum"
             " FROM albums al"
             " JOIN artists ar ON ar.id = al.artist_id"

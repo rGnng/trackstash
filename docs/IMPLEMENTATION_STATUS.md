@@ -26,9 +26,16 @@
 - Metadata round-trips cover FLAC, MP3, M4A, OGG, Opus, WAV, AIFF, and WavPack.
 - Bitrates are stored and displayed in Kbps; schema v2 migrates pre-existing values.
 - Schema v3 stores track and disc values as text and migrates existing libraries.
-- The interface uses Qt Fusion styling, a menu-less action bar, and Settings-hosted library and database management.
-- Album artwork is loaded asynchronously from embedded tags for visible albums; there is no cover cache on disk.
-- The status bar shows library and selection counts, defaults to visible, and can be disabled in Settings.
+- The interface uses Qt Fusion styling, a menu-less action bar, and Settings-hosted
+  library and database management. The Settings → Library tab no longer contains
+  selection-specific actions.
+- Album artwork is loaded asynchronously from embedded tags for visible albums;
+  front artwork is preferred and other embedded picture types are used as a
+  fallback, so common FLAC files with an untyped picture still show a cover.
+  Albums without artwork show a transparent “No cover artwork” label instead of
+  a colored placeholder tile.
+- The status bar shows library and selection counts without an app-name prefix,
+  defaults to visible, and can be disabled in Settings.
 - Track and disc values are stored as text, matching tag semantics.
 - Window size persists between launches.
 - Album grid sorting defaults to date added descending and is configurable in Settings.
@@ -39,7 +46,9 @@
 - Spin boxes and combo boxes ignore mouse-wheel changes unless focused.
 - The left editor width defaults to 280 px, is user-resizable, and persists between launches.
 - Imports copy by default or move on request; sources are untouched in copy mode.
-- Import destinations follow the organization template from Settings; per-import tag overrides remain available.
+- Import destinations follow the organization template from Settings; the template
+  field offers a Default reset and a copyable variable reference. Per-import tag
+  overrides remain available.
 - The import dialog accepts folders or individual files and warns before very large imports.
 - Tag edits update files and DB and apply immediately; user-facing undo/redo is removed.
 - Organization recomputes song UUIDs from the new relative paths and remaps all
@@ -53,7 +62,7 @@
 Test status at the time of writing:
 
 ```text
-95 passed, 2 skipped (default suite)
+99 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 

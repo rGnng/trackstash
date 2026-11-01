@@ -464,7 +464,7 @@ segments. Tokens resolve from the edited metadata, not only the on-disk state.
 Unknown tokens are rejected during validation.
 
 The default import and organization template is
-`{album_artist}/{album}/{disc_prefix}{track:02} {title}` (D-18). `{disc_prefix}` expands to `01-` only for multi-disc albums, so disc numbers prefix the track filename instead of creating folders. `{disc_dir}` remains available for templates that prefer a `Disc N/` folder. It is configured in Settings and used by import, organization, and strong ordering.
+`{album_artist}/{album}/{disc_prefix}{track:02} {title}` (D-18). `{disc_prefix}` expands to `01-` only for multi-disc albums, so disc numbers prefix the track filename instead of creating folders. `{disc_dir}` remains available for templates that prefer a `Disc N/` folder. It is configured in Settings and used by import, organization, and strong ordering. The template field has a Default button that restores the default template and a ? button that opens a copyable variable reference.
 
 ### 7.4 Tracks-compatible identity
 
@@ -551,8 +551,9 @@ Unsupported files are never modified.
   covers resize within fixed column/row gaps to fill the viewport. The album
   grid sorts by date added descending by default; field and order are
   configurable in Settings.
-- **Status bar:** shows the active library, track count, and selection count. It
-  is enabled by default and configurable in Settings.
+- **Status bar:** shows the active library, track count, and selection count,
+  without an application-name prefix. It is enabled by default and configurable
+  in Settings.
 - **Wheel safety:** spin boxes and combo boxes MUST only change on wheel input
   while they have keyboard focus, so scrolling the page cannot alter values.
 - **Strong ordering:** tag edits that change the destination path MUST move the
@@ -570,8 +571,9 @@ Unsupported files are never modified.
 - **Action bar:** no main menu bar. Import, refresh, format, artwork
   filtering, view switching, and Settings live in the top bar.
 - **Import:** a top-bar Import… button. Library identity, scans, adding libraries,
-  relocation, ReKey, enable/disable, and removal live directly in the
-  Settings → Library panel.
+  relocation, ReKey, enable/disable, removal, Find Duplicates, and database backup
+  live directly in the Settings → Library panel. Selection-specific actions stay
+  in the main action bar and context menus rather than Settings.
 - **Albums view:** multi-select with drag or ⌘-click for batch tag editing.
   `Cmd+[` / `Ctrl+[` returns from a filtered album view to the Albums grid.
   Import uses one Add Source control, accepts dragged files/folders, and previews
@@ -656,10 +658,13 @@ TrackStash is a native desktop application built with Python 3.12+ and PySide6
   full hashing deferred until duplicate review or move detection requires it.
 - **Artwork:** embedded artwork is read asynchronously from the selected album's
   first track only when the album enters the viewport, then cached in memory with
-  a bounded LRU. No cover files are written to disk; `ts_artwork` tracks per-track
-  embedded artwork metadata and `albums.artwork` stays `NULL`. New artwork is
-  normalized to JPEG (default 1000 px long edge, quality 90) with Crop to square,
-  Fit to square, or Original aspect ratio before embedding.
+  a bounded LRU. Front-cover artwork is preferred; when a file only has embedded
+  artwork tagged with another picture type, the first available image is used as
+  the album cover. Albums without artwork show a transparent “No cover artwork”
+  label instead of a colored placeholder tile. No cover files are written to disk; `ts_artwork` tracks
+  per-track embedded artwork metadata and `albums.artwork` stays `NULL`. New
+  artwork is normalized to JPEG (default 1000 px long edge, quality 90) with Crop
+  to square, Fit to square, or Original aspect ratio before embedding.
 - **Safety:** the journal records prior tag state, artwork, paths, and IDs before
   any mutation. Imports, moves, organization, tag writes, and index deletions are
   journaled. Files moved to the macOS Trash are explicitly not reversible within

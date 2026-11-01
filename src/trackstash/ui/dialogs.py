@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QTextBrowser,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -66,6 +67,105 @@ TAG_FIELDS: tuple[tuple[str, str], ...] = (
     ("catalog_number", "Catalog number"),
     ("original_date", "Original date"),
 )
+
+
+_TEMPLATE_HELP_ROWS: tuple[tuple[str, str], ...] = (
+    ("{title}", "Song title"),
+    ("{artist}", "Primary artist"),
+    ("{album_artist}", "Album artist, falling back to the primary artist"),
+    ("{album}", "Album title"),
+    ("{year}", "Release year"),
+    ("{date}", "Alias of {year}"),
+    ("{genre}", "Primary genre"),
+    ("{composer}", "Composer"),
+    ("{comment}", "Comment"),
+    ("{label}", "Record label"),
+    ("{catalog}", "Catalog number"),
+    ("{track}", "Track number"),
+    ("{track_total}", "Total tracks on the disc"),
+    ("{disc}", "Disc number"),
+    ("{disc_total}", "Total discs"),
+    ("{disc_dir}", "Disc 2/ for multi-disc albums; empty otherwise"),
+    ("{disc_prefix}", "02- for multi-disc albums; empty otherwise"),
+    ("{format}", "Lowercase source format, such as flac or mp3"),
+    ("{bitrate}", "Bitrate in kbps"),
+    ("{ext}", "File extension without the dot"),
+)
+
+
+class TemplateHelpDialog(QDialog):
+    """Read-only reference for organization template variables."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Organization Template Variables")
+        self.resize(760, 580)
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "Templates are used by Import and Organize to build destination "
+            "paths. Select any text to copy it, or use Copy All.",
+            self,
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        rows = "".join(
+            f"<tr><td><code>{token}</code></td><td>{description}</td></tr>"
+            for token, description in _TEMPLATE_HELP_ROWS
+        )
+        self.browser = QTextBrowser(self)
+        self.browser.setHtml(
+            "<p><b>Variables</b></p>"
+            "<table cellspacing='0' cellpadding='5' width='100%'>"
+            "<tr><th align='left'>Variable</th><th align='left'>Description</th></tr>"
+            f"{rows}</table>"
+            "<p><b>Formatting</b></p>"
+            "<table cellspacing='0' cellpadding='5' width='100%'>"
+            "<tr><td><code>{track:02}</code></td>"
+            "<td>Zero-pad a value to two digits.</td></tr>"
+            "<tr><td><code>{artist|Unknown Artist}</code></td>"
+            "<td>Use the fallback when the value is empty.</td></tr>"
+            "<tr><td><code>/</code></td><td>Create a subfolder.</td></tr>"
+            "</table>"
+            "<p><b>Default</b></p>"
+            f"<pre>{DEFAULT_TEMPLATE}</pre>"
+            "<p>The source file extension is added automatically when the "
+            "rendered path has no extension.</p>"
+        )
+        layout.addWidget(self.browser, 1)
+        buttons = QHBoxLayout()
+        self.copy_button = QPushButton("Copy All", self)
+        self.copy_button.clicked.connect(self._copy)
+        close = QPushButton("Close", self)
+        close.clicked.connect(self.accept)
+        buttons.addWidget(self.copy_button)
+        buttons.addStretch(1)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+
+    def _copy(self) -> None:
+        QApplication.clipboard().setText(self.browser.toPlainText())
+
+
+def _template_field(
+    value: str, parent: QWidget | None = None
+) -> tuple[QWidget, QLineEdit, QPushButton, QPushButton]:
+    host = QWidget(parent)
+    row = QHBoxLayout(host)
+    row.setContentsMargins(0, 0, 0, 0)
+    edit = QLineEdit(value, host)
+    row.addWidget(edit, 1)
+    default = QPushButton("Default", host)
+    default.setAutoDefault(False)
+    default.setToolTip("Restore the default template")
+    default.clicked.connect(lambda: edit.setText(DEFAULT_TEMPLATE))
+    row.addWidget(default)
+    help_button = QPushButton("?", host)
+    help_button.setAutoDefault(False)
+    help_button.setFixedSize(28, 28)
+    help_button.setToolTip("Show available template variables")
+    help_button.clicked.connect(lambda: TemplateHelpDialog(host).exec())
+    row.addWidget(help_button)
+    return host, edit, default, help_button
 
 
 def _values_text(value: object) -> str:
@@ -509,9 +609,15 @@ class OrganizeDialog(QDialog):
         layout = QVBoxLayout(self)
         template_row = QHBoxLayout()
         template_row.addWidget(QLabel("Template", self))
-        self.template_edit = QLineEdit(service.default_template, self)
-        template_row.addWidget(self.template_edit, 1)
+        (
+            template_host,
+            self.template_edit,
+            self.template_default_button,
+            self.template_help_button,
+        ) = _template_field(service.default_template, self)
+        template_row.addWidget(template_host, 1)
         layout.addLayout(template_row)
+        self.template_edit.textChanged.connect(self._template_changed)
 
         self.table = QTableWidget(0, 4, self)
         self.table.setHorizontalHeaderLabels(["Current path", "New path", "New UUID", "Status"])
@@ -534,6 +640,11 @@ class OrganizeDialog(QDialog):
         buttons.addStretch(1)
         buttons.addWidget(cancel)
         layout.addLayout(buttons)
+
+    def _template_changed(self, _text: str) -> None:
+        self.items = []
+        self.table.setRowCount(0)
+        self.status.setText("Template changed; preview the move before executing.")
 
     def preview(self) -> None:
         self.status.setText("Planning…")
@@ -757,7 +868,6 @@ class SettingsDialog(QDialog):
         artwork_max_size: int = 1000,
         artwork_quality: int = 90,
         artwork_aspect: str = "crop",
-        selection_available: bool = True,
         service: LibraryService | None = None,
         current_library_id: str | None = None,
         parent: QWidget | None = None,
@@ -774,8 +884,13 @@ class SettingsDialog(QDialog):
         general_tab = QWidget(self.tabs)
         general_layout = QVBoxLayout(general_tab)
         form = QFormLayout()
-        self.template_edit = QLineEdit(template, general_tab)
-        form.addRow("Organization template", self.template_edit)
+        (
+            template_host,
+            self.template_edit,
+            self.template_default_button,
+            self.template_help_button,
+        ) = _template_field(template, general_tab)
+        form.addRow("Organization template", template_host)
         template_hint = QLabel(
             "Used by Import and Organize. {disc_prefix} adds 01- before the "
             "track number for multi-disc albums; {disc_dir} adds a Disc N/ folder.",
@@ -884,22 +999,6 @@ class SettingsDialog(QDialog):
         )
         library_row.addStretch(1)
         library_layout.addLayout(library_row)
-
-        selection_group = QGroupBox("Current selection", library_tab)
-        selection_grid = QGridLayout(selection_group)
-        for index, (key, label) in enumerate(
-            (
-                ("organize", "Organize…"),
-                ("delete", "Delete…"),
-                ("set_cover", "Set Cover…"),
-                ("remove_cover", "Remove Cover"),
-                ("extract_cover", "Extract Cover…"),
-            )
-        ):
-            button = self._library_button(key, label, selection_group)
-            button.setEnabled(selection_available)
-            selection_grid.addWidget(button, index // 2, index % 2)
-        library_layout.addWidget(selection_group)
 
         database_group = QGroupBox("Database", library_tab)
         database_layout = QVBoxLayout(database_group)

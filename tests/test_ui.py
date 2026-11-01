@@ -214,6 +214,26 @@ def test_album_grid_loads_cover_only_on_decoration(
     assert decoration is not None
 
 
+def test_album_grid_no_artwork_placeholder_is_transparent(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from PySide6.QtCore import Qt
+
+    from trackstash.ui.models import AlbumGridModel
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    model = AlbumGridModel(database.list_albums(library.id))
+    model.set_cover_size(180)
+    icon = model.data(model.index(0, 0), Qt.ItemDataRole.DecorationRole)
+    assert icon is not None
+    image = icon.pixmap(180, 180).toImage()
+    assert image.pixelColor(0, 0).alpha() == 0
+    opaque = sum(
+        1 for x in range(0, 180, 2) for y in range(0, 180, 2) if image.pixelColor(x, y).alpha()
+    )
+    assert 0 < opaque < 180 * 180 // 20
+
+
 def test_import_dialog_accepts_dropped_folder(
     qtbot: QtBot, tmp_path: Path, audio_factory: Path
 ) -> None:
@@ -510,8 +530,27 @@ def test_settings_column_changes_persist(qtbot: QtBot, tmp_path: Path, audio_fac
     assert again.column_checks["codec"].isChecked() is False
 
 
+def test_organize_dialog_template_controls(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from trackstash.core.template import DEFAULT_TEMPLATE
+    from trackstash.ui.dialogs import OrganizeDialog
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    service = LibraryService(database)
+    track = database.list_tracks(library_id=library.id)[0]
+    dialog = OrganizeDialog(service, [track.id])
+    qtbot.addWidget(dialog)
+    assert dialog.template_edit.text() == service.default_template
+    assert dialog.template_help_button.text() == "?"
+    dialog.template_edit.setText("custom")
+    dialog.template_default_button.click()
+    assert dialog.template_edit.text() == DEFAULT_TEMPLATE
+    assert dialog.items == []
+
+
 def test_settings_contains_library_actions(qtbot: QtBot, tmp_path: Path) -> None:
-    from PySide6.QtWidgets import QDialog
+    from PySide6.QtWidgets import QDialog, QGroupBox
 
     from trackstash.ui.dialogs import SettingsDialog
 
@@ -521,16 +560,15 @@ def test_settings_contains_library_actions(qtbot: QtBot, tmp_path: Path) -> None
         "{artist}/{album}/{title}",
     )
     qtbot.addWidget(dialog)
+    from trackstash.core.template import DEFAULT_TEMPLATE
+
     assert dialog.tabs.count() == 3
     assert dialog.status_bar_checkbox.isChecked()
-    assert set(dialog.library_buttons) == {
-        "find_duplicates",
-        "organize",
-        "delete",
-        "set_cover",
-        "remove_cover",
-        "extract_cover",
-    }
+    assert set(dialog.library_buttons) == {"find_duplicates"}
+    dialog.template_edit.setText("custom")
+    dialog.template_default_button.click()
+    assert dialog.template_edit.text() == DEFAULT_TEMPLATE
+    assert "Current selection" not in [group.title() for group in dialog.findChildren(QGroupBox)]
     assert dialog.library_panel.library_combo.count() == 0
     library_tab = dialog.tabs.widget(2)
     general_tab = dialog.tabs.widget(0)
@@ -539,6 +577,22 @@ def test_settings_contains_library_actions(qtbot: QtBot, tmp_path: Path) -> None
     dialog.library_buttons["find_duplicates"].click()
     assert dialog.requested_action == "find_duplicates"
     assert dialog.result() == QDialog.DialogCode.Accepted
+
+
+def test_template_help_dialog_lists_and_copies_variables(qtbot: QtBot) -> None:
+    from PySide6.QtWidgets import QApplication
+
+    from trackstash.ui.dialogs import TemplateHelpDialog
+
+    dialog = TemplateHelpDialog()
+    qtbot.addWidget(dialog)
+    text = dialog.browser.toPlainText()
+    assert "{title}" in text
+    assert "{track:02}" in text
+    assert "{artist|Unknown Artist}" in text
+    assert "{disc_prefix}" in text
+    dialog.copy_button.click()
+    assert "{title}" in QApplication.clipboard().text()
 
 
 def test_status_bar_defaults_and_can_be_hidden(
@@ -552,7 +606,8 @@ def test_status_bar_defaults_and_can_be_hidden(
     window.tracks_view_button.click()
     window.table.selectRow(0)
     assert window.statusBar().isVisible()
-    assert "UI Library" in window.status_summary.text()
+    assert window.status_summary.text() == "UI Library · 1 track"
+    assert "TrackStash" not in window.status_summary.text()
     assert "1 selected" in window.status_selection.text()
 
     database.set_setting("status_bar_visible", "0")

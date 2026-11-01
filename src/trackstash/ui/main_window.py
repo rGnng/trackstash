@@ -498,8 +498,9 @@ class MainWindow(QMainWindow):
     def _update_status(self) -> None:
         if not hasattr(self, "status_summary"):
             return
+        track_word = "track" if self._total_tracks == 1 else "tracks"
         base = (
-            f"{self._library_label} · {self._total_tracks} tracks"
+            f"{self._library_label} · {self._total_tracks} {track_word}"
             if self._library_label
             else "No library selected"
         )
@@ -843,7 +844,7 @@ class MainWindow(QMainWindow):
             return None
         if not artworks:
             return None
-        artwork = artworks[0]
+        artwork = next((item for item in artworks if item.kind == "front"), artworks[0])
         return (
             artwork.data,
             f"{artwork.width}x{artwork.height} · {artwork.mime}",
@@ -1188,17 +1189,8 @@ class MainWindow(QMainWindow):
         self.set_visible_columns(visible)
         self.refresh_libraries()
         self._update_status()
-        actions = {
-            "find_duplicates": self.find_duplicates,
-            "organize": self.organize,
-            "delete": self.delete_tracks,
-            "set_cover": self.set_cover,
-            "remove_cover": self.remove_cover,
-            "extract_cover": self.extract_cover,
-        }
-        requested = dialog.requested_action
-        if requested in actions:
-            actions[requested]()
+        if dialog.requested_action == "find_duplicates":
+            self.find_duplicates()
 
     def default_column_config(self) -> dict[str, object]:
         keys = [key for _, key in COLUMNS]
