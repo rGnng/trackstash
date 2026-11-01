@@ -138,6 +138,40 @@ AlbumItemDelegate.paint()
 
 如果只改其中一条，两个视图就会不一致。这正是之前反复出问题的核心原因之一。
 
+### 3.4 宽度反馈环（2026-11-01 修复）
+
+专辑网格的宽度问题不是单纯的 padding/inset 数值不对，而是一个布局反馈环：
+
+```text
+viewport 宽度 -> cover 大小 -> 行高/列数 -> 内容高度 -> 滚动条显隐 -> viewport 宽度
+```
+
+当专辑数量较少、内容高度刚好在视口边界附近时，会形成两个都“自洽”的布局：
+
+- A：滚动条可见，viewport 较窄，选出较小的 cover，列数多一列，内容变矮；
+- B：滚动条隐藏，viewport 较宽，选出较大的 cover，列数少一列，内容变高。
+
+两者互相触发，就会每隔一个 60 ms 防抖周期来回跳。截图对比中，同一个 1440×900 窗口下的 8 张专辑会在“4 列、无滚动条”和“3 列、有滚动条”之间反复切换。
+
+之前的 style/fix/revert 提交只调整了外层 margin、QListView spacing 或某个宽度公式，没有切断这条反馈链，所以每修一处就会在另一个窗口宽度下重新出现。
+
+当前约束：
+
+1. **sizing 永远使用预留滚动条后的宽度**：`AlbumGridView.layout_width()` 返回 `view.width() - verticalScrollBar().sizeHint().width()`；即使滚动条当前隐藏，也保留这条 gutter。
+2. `album_cover_layout()` 只接受这个“可用宽度”，并按
+   `columns * (item + ALBUM_SPACING) + ALBUM_SPACING + ALBUM_FIT_ALLOWANCE`
+   校验是否放得下。
+3. **`ALBUM_FIT_ALLOWANCE = 1`**：QListView 的实际列数判断比“左右 gap + item 总宽”多要 1 px。没有这 1 px 时，只要 `(width - ALBUM_SPACING) % columns == 0`，算出的最后一列就会放不下，QListView 会静默退回上一列，右侧出现一条巨大的空白。真实 Cocoa 截图中 1582×959 窗口的 `icon=222` 但只有 4 列，就是命中这个边界。
+4. 滚动条显隐只影响 viewport 的可用像素，不再影响 cover 或列数，因此不会反向触发滚动条；`layout_width()` 同时取 `min(预留宽度, 实际 viewport 宽度)`，吸收不同平台滚动条实际宽度与 `sizeHint()` 的 1–2 px 差异。
+5. `AlbumGridView.showEvent()` 在首帧前立即重算，避免隐藏状态下的 100 px 占位宽度把 cover 算成 32/50 px。
+6. 新增回归测试：
+   - 8 张专辑在 1440×900 下连续采样，布局状态必须完全稳定；
+   - `show()` 后首帧的 cover 必须已经使用真实宽度；
+   - 宽度边界 1560–1600 下，实际第一行列数必须等于计算列数；
+   - `album_cover_layout()` 在 900–2000 的所有整数宽度上都不超出 QListView 的 1 px 边界。
+
+代价：滚动条隐藏时，右侧会保留约一个滚动条宽度的空白（macOS/Fusion 下约 14–18 px）。这是有意的稳定性取舍，避免用“覆盖滚动条后重新计算”的方式再次引入反馈环。
+
 ## 4. 颜色设计（当前最终方案）
 
 唯一色值在：
@@ -261,6 +295,15 @@ QPushButton:checked {
   - `configure_application()` 不改变 Base / AlternateBase / Window / Highlight / HighlightedText。
 - `test_album_selection_uses_the_palette_highlight`：
   - delegate 的背景确实来自 palette，而不是内部硬编码。
+- `test_album_grid_layout_is_stable_while_scrollbar_toggles`：
+  - 8 张专辑连续采样，列数、icon、viewport、滚动条状态不发生变化。
+- `test_album_grid_first_show_uses_the_real_view_width`：
+  - `show()` 后首帧的 cover 不再沿用隐藏时的占位宽度。
+- `test_album_grid_keeps_computed_columns_at_width_boundaries`：
+  - 1560–1600 的宽度边界下，实际第一行列数必须等于计算列数。
+- `test_album_grid_fills_viewport_with_fixed_gaps`：
+  - 900–2000 的所有整数宽度都满足 QListView 的 1 px 边界；
+  - cover 未达到上限时不会浪费下一列。
 
 ## 8. 如果以后要支持系统主题色
 

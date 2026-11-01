@@ -34,6 +34,7 @@ from PySide6.QtGui import (
     QPalette,
     QPixmap,
     QResizeEvent,
+    QShowEvent,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -89,18 +90,29 @@ ALBUM_MAX_COVER = 320
 ALBUM_SPACING = 22
 ALBUM_ITEM_PADDING = 3
 ALBUM_ITEM_MARGIN = ALBUM_ITEM_PADDING * 2
+# QListView needs one extra pixel beyond the right outer gap before it accepts
+# the next item in a row. Keep one pixel of slack so a computed column count
+# does not collapse to the previous column at exact width boundaries.
+ALBUM_FIT_ALLOWANCE = 1
 
 
 def album_cover_layout(width: int) -> tuple[int, int]:
-    """Return the album grid column count and cover size for a viewport width.
+    """Return the album grid column count and cover size for a usable width.
 
     This mirrors the auto-fill algorithm used by the sibling Tracks and
     WebTracks album grids: fit the maximum number of columns at the minimum
     cover size, then distribute the remaining width evenly. The album count is
     deliberately not part of the calculation, so covers keep a stable size
     instead of growing when a library has only a few albums.
+
+    ``width`` is the space available to the item grid, excluding the vertical
+    scrollbar. Callers must reserve the scrollbar extent even while the
+    scrollbar is hidden (see ``AlbumGridView.layout_width``). QListView applies
+    the same ``ALBUM_SPACING`` gap around the first/last item, and its internal
+    width test needs one extra pixel at the right edge, hence the outer gaps
+    plus ``ALBUM_FIT_ALLOWANCE`` in the arithmetic.
     """
-    width = max(1, int(width)) - 2 * ALBUM_SPACING
+    width = max(1, int(width)) - ALBUM_FIT_ALLOWANCE - 2 * ALBUM_SPACING
     pitch = ALBUM_MIN_COVER + ALBUM_ITEM_MARGIN + ALBUM_SPACING
     columns = max(1, (width + ALBUM_SPACING) // pitch)
     cover = (width + ALBUM_SPACING) // columns - ALBUM_ITEM_MARGIN - ALBUM_SPACING
@@ -112,20 +124,43 @@ class AlbumGridView(QListView):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.resize_callback: Callable[[int], None] | None = None
+        self.resize_callback: Callable[[], None] | None = None
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
         self._resize_timer.setInterval(60)
         self._resize_timer.timeout.connect(self._notify_resize)
         self.viewport().installEventFilter(self)
 
+    def layout_width(self) -> int:
+        """Return a width that stays constant while the scrollbar toggles.
+
+        The scrollbar lives beside the viewport, so ``viewport().width()``
+        shrinks when items start to overflow and grows again when they fit.
+        Sizing covers from that value creates a feedback loop: a scrollbar
+        toggling can change the column count, which changes the content height,
+        which toggles the scrollbar again. Always reserving the scrollbar
+        extent makes the calculation independent of its current visibility.
+        """
+        scrollbar_width = self.verticalScrollBar().sizeHint().width()
+        reserved = self.width() - scrollbar_width
+        # The real scrollbar can be a pixel or two wider than the style hint.
+        # Using the smaller of both values keeps the item grid inside the
+        # actual viewport without making the result depend on visibility.
+        return max(1, min(reserved, self.viewport().width()))
+
     def _notify_resize(self) -> None:
         if self.resize_callback is not None:
-            self.resize_callback(self.viewport().width())
+            self.resize_callback()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._resize_timer.start()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        # A hidden view has a placeholder geometry. Recompute before the first
+        # frame is painted instead of waiting for the 60 ms resize debounce.
+        self._notify_resize()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.viewport() and event.type() == QEvent.Type.Resize:
@@ -850,10 +885,12 @@ class MainWindow(QMainWindow):
         self._selection_changed()
         self._update_status()
 
-    def _update_album_grid(self, width: int | None = None) -> None:
+    def _update_album_grid(self, usable_width: int | None = None) -> None:
         if not hasattr(self, "album_view"):
             return
-        width = width if width is not None else self.album_view.viewport().width()
+        # The view reserves the scrollbar gutter, so the result cannot depend
+        # on whether the scrollbar happens to be visible right now.
+        width = usable_width if usable_width is not None else self.album_view.layout_width()
         columns, cover = album_cover_layout(width)
         if (columns, cover) == (self._album_columns, self._album_cover_size):
             return

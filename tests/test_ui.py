@@ -366,13 +366,33 @@ def test_album_grid_fills_viewport_with_fixed_gaps(
         ]
     )
 
-    from trackstash.ui.main_window import album_cover_layout
+    from trackstash.ui.main_window import (
+        ALBUM_FIT_ALLOWANCE,
+        ALBUM_ITEM_MARGIN,
+        ALBUM_MAX_COVER,
+        ALBUM_SPACING,
+        album_cover_layout,
+    )
 
     assert album_cover_layout(1000) == (4, 216)
     assert album_cover_layout(1100) == (4, 241)
     assert album_cover_layout(1200) == (5, 207)
     assert album_cover_layout(1440) == (6, 208)
     assert album_cover_layout(1145) == (4, 252)
+    assert album_cover_layout(1272) == (5, 221)
+
+    # QListView needs one extra pixel beyond the right outer gap, so the
+    # computed grid must leave that allowance at every width boundary.
+    for width in range(900, 2001):
+        columns, cover = album_cover_layout(width)
+        item_width = cover + ALBUM_ITEM_MARGIN
+        used = columns * (item_width + ALBUM_SPACING) + ALBUM_SPACING + ALBUM_FIT_ALLOWANCE
+        assert used <= width
+        if cover < ALBUM_MAX_COVER:
+            wider = (
+                (columns + 1) * (item_width + ALBUM_SPACING) + ALBUM_SPACING + ALBUM_FIT_ALLOWANCE
+            )
+            assert wider > width
 
     window._update_album_grid(1000)
     assert window.album_view.iconSize().width() == 216
@@ -409,8 +429,7 @@ def test_album_grid_reflows_after_resize_while_hidden(
     window.tabs.setCurrentIndex(1)
     qtbot.wait(100)
 
-    viewport = window.album_view.viewport().width()
-    columns, cover = album_cover_layout(viewport)
+    columns, cover = album_cover_layout(window.album_view.layout_width())
     assert window.album_view.iconSize().width() == cover
     rects = [
         window.album_view.visualRect(window.album_model.index(index, 0)) for index in range(10)
@@ -441,6 +460,112 @@ def test_album_grid_cover_size_does_not_depend_on_album_count(
     many = window.album_view.iconSize().width()
 
     assert few == many == 252
+
+
+def test_album_grid_layout_is_stable_while_scrollbar_toggles(qtbot: QtBot, tmp_path: Path) -> None:
+    from trackstash.core.db import AlbumRow
+    from trackstash.ui.main_window import ALBUM_MIN_COVER, album_cover_layout
+
+    database = Database(tmp_path / "album-grid-stability.sqlite")
+    library_root = tmp_path / "Library"
+    library_root.mkdir()
+    database.add_library(library_root, name="Stability Library")
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    rows = [
+        AlbumRow(f"album-{index}", f"Album {index}", "Artist", "2024", 1, None, "")
+        for index in range(8)
+    ]
+    window.album_model.set_albums(rows)
+    window.tabs.setCurrentIndex(1)
+    window.show()
+    window.resize(1440, 900)
+    qtbot.wait(300)
+
+    view = window.album_view
+    states = set()
+    for _ in range(10):
+        rects = [view.visualRect(window.album_model.index(index, 0)) for index in range(8)]
+        columns = len([rect for rect in rects if rect.y() == rects[0].y()])
+        states.add(
+            (
+                columns,
+                view.viewport().width(),
+                view.iconSize().width(),
+                view.verticalScrollBar().isVisible(),
+            )
+        )
+        qtbot.wait(80)
+
+    assert len(states) == 1, f"album grid kept reflowing: {sorted(states)}"
+    columns, cover = album_cover_layout(view.layout_width())
+    assert columns >= 1
+    assert view.iconSize().width() == cover >= ALBUM_MIN_COVER
+    assert view.horizontalScrollBar().maximum() == 0
+    # With the scrollbar hidden the viewport is wider than the reserved layout
+    # width, but the covers must still be sized for the scrollbar-visible case.
+    assert view.layout_width() <= view.viewport().width()
+
+
+def test_album_grid_keeps_computed_columns_at_width_boundaries(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    from trackstash.core.db import AlbumRow
+    from trackstash.ui.main_window import album_cover_layout
+
+    database = Database(tmp_path / "album-grid-boundary.sqlite")
+    library_root = tmp_path / "Library"
+    library_root.mkdir()
+    database.add_library(library_root, name="Boundary Library")
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.album_model.set_albums(
+        [
+            AlbumRow(f"album-{index}", f"Album {index}", "Artist", "2024", 1, None, "")
+            for index in range(40)
+        ]
+    )
+    window.tabs.setCurrentIndex(1)
+    window.show()
+
+    # These widths include the exact boundaries where the old arithmetic fit
+    # one pixel less than QListView requires and silently dropped a column.
+    for width in range(1560, 1601, 2):
+        window.resize(width, 900)
+        qtbot.wait(120)
+        view = window.album_view
+        columns, cover = album_cover_layout(view.layout_width())
+        first = [view.visualRect(window.album_model.index(index, 0)) for index in range(20)]
+        first_row = [rect for rect in first if rect.y() == first[0].y()]
+        assert len(first_row) == columns, (width, view.viewport().width(), cover)
+        assert view.horizontalScrollBar().maximum() == 0
+
+
+def test_album_grid_first_show_uses_the_real_view_width(qtbot: QtBot, tmp_path: Path) -> None:
+    from trackstash.core.db import AlbumRow
+    from trackstash.ui.main_window import ALBUM_MIN_COVER
+
+    database = Database(tmp_path / "album-grid-first-show.sqlite")
+    library_root = tmp_path / "Library"
+    library_root.mkdir()
+    database.add_library(library_root, name="First Show Library")
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.album_model.set_albums(
+        [
+            AlbumRow(f"album-{index}", f"Album {index}", "Artist", "2024", 1, None, "")
+            for index in range(40)
+        ]
+    )
+    window.tabs.setCurrentIndex(1)
+
+    # Before show(), QListView still has a placeholder geometry, so the first
+    # frame must not inherit a tiny cover computed from it. Disable the resize
+    # debounce so only showEvent can supply the width.
+    window.album_view._resize_timer.setInterval(10_000)
+    window.show()
+    qtbot.wait(0)
+    assert window.album_view.iconSize().width() >= ALBUM_MIN_COVER
 
 
 def test_album_selection_uses_the_palette_highlight(qtbot: QtBot, tmp_path: Path) -> None:
