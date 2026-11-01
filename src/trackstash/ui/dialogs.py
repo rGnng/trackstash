@@ -9,7 +9,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -24,7 +23,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
-    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -43,6 +41,7 @@ from trackstash.core.library import (
     collect_audio_files,
 )
 from trackstash.core.template import DEFAULT_TEMPLATE
+from trackstash.ui.widgets import NoWheelComboBox, NoWheelSpinBox
 
 TAG_FIELDS: tuple[tuple[str, str], ...] = (
     ("title", "Title"),
@@ -287,29 +286,23 @@ class ImportDialog(QDialog):
         options = QHBoxLayout()
         options.addWidget(QLabel(f"Target: {library.name}", self))
         options.addWidget(QLabel("Mode", self))
-        self.mode_combo = QComboBox(self)
+        self.mode_combo = NoWheelComboBox(self)
         self.mode_combo.addItem("Copy (recommended)", "copy")
         self.mode_combo.addItem("Move", "move")
         self.mode_combo.currentIndexChanged.connect(self._invalidate_plan)
         options.addWidget(self.mode_combo)
         options.addWidget(QLabel("Duplicates", self))
-        self.duplicate_combo = QComboBox(self)
+        self.duplicate_combo = NoWheelComboBox(self)
         self.duplicate_combo.addItem("Skip", "skip")
         self.duplicate_combo.addItem("Keep both", "keep")
         self.duplicate_combo.addItem("Replace", "replace")
         self.duplicate_combo.currentIndexChanged.connect(self._invalidate_plan)
         options.addWidget(self.duplicate_combo)
-        layout.addLayout(options)
-
-        template_row = QHBoxLayout()
-        template_row.addWidget(QLabel("Destination template", self))
-        self.template_edit = QLineEdit(service.default_template, self)
-        self.template_edit.textEdited.connect(self._invalidate_plan)
-        template_row.addWidget(self.template_edit, 1)
+        options.addStretch(1)
         overrides = QPushButton("Tag overrides…", self)
         overrides.clicked.connect(self._edit_overrides)
-        template_row.addWidget(overrides)
-        layout.addLayout(template_row)
+        options.addWidget(overrides)
+        layout.addLayout(options)
 
         self.table = QTableWidget(0, 4, self)
         self.table.setHorizontalHeaderLabels(["Source", "Destination", "Action", "Note"])
@@ -401,7 +394,6 @@ class ImportDialog(QDialog):
                 sources,
                 self.library.id,
                 mode=str(self.mode_combo.currentData()),
-                template=self.template_edit.text().strip() or DEFAULT_TEMPLATE,
                 common_edits=self.common_edits,
                 duplicate_policy=str(self.duplicate_combo.currentData()),
                 progress=self._progress,
@@ -717,8 +709,10 @@ class SettingsDialog(QDialog):
         preserve_mtime: bool = True,
         artwork_max_size: int = 1000,
         artwork_quality: int = 90,
-        artwork_crop_square: bool = True,
+        artwork_aspect: str = "crop",
         selection_available: bool = True,
+        service: LibraryService | None = None,
+        current_library_id: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -749,7 +743,7 @@ class SettingsDialog(QDialog):
 
         albums_group = QGroupBox("Albums view", general_tab)
         albums_form = QFormLayout(albums_group)
-        self.album_sort = QComboBox(albums_group)
+        self.album_sort = NoWheelComboBox(albums_group)
         for label, value in (
             ("Date added", "date_added"),
             ("Album title", "title"),
@@ -760,7 +754,7 @@ class SettingsDialog(QDialog):
         sort_index = self.album_sort.findData(album_sort)
         self.album_sort.setCurrentIndex(sort_index if sort_index >= 0 else 0)
         albums_form.addRow("Sort by", self.album_sort)
-        self.album_order = QComboBox(albums_group)
+        self.album_order = NoWheelComboBox(albums_group)
         self.album_order.addItem("Descending", "desc")
         self.album_order.addItem("Ascending", "asc")
         order_index = self.album_order.findData(album_order)
@@ -785,19 +779,20 @@ class SettingsDialog(QDialog):
 
         artwork_group = QGroupBox("Artwork", general_tab)
         artwork_form = QFormLayout(artwork_group)
-        self.artwork_max_size = QSpinBox(artwork_group)
+        self.artwork_max_size = NoWheelSpinBox(artwork_group)
         self.artwork_max_size.setRange(64, 10000)
         self.artwork_max_size.setValue(artwork_max_size)
         artwork_form.addRow("Maximum long edge (px)", self.artwork_max_size)
-        self.artwork_quality = QSpinBox(artwork_group)
+        self.artwork_quality = NoWheelSpinBox(artwork_group)
         self.artwork_quality.setRange(1, 100)
         self.artwork_quality.setValue(artwork_quality)
         artwork_form.addRow("JPEG quality", self.artwork_quality)
-        self.artwork_crop = QComboBox(artwork_group)
-        self.artwork_crop.addItem("Fit to square", True)
-        self.artwork_crop.addItem("Original aspect ratio", False)
-        crop_index = self.artwork_crop.findData(artwork_crop_square)
-        self.artwork_crop.setCurrentIndex(crop_index if crop_index >= 0 else 0)
+        self.artwork_crop = NoWheelComboBox(artwork_group)
+        self.artwork_crop.addItem("Fit to square", "fit")
+        self.artwork_crop.addItem("Crop to square", "crop")
+        self.artwork_crop.addItem("Original aspect ratio", "original")
+        crop_index = self.artwork_crop.findData(artwork_aspect)
+        self.artwork_crop.setCurrentIndex(crop_index if crop_index >= 0 else 1)
         artwork_form.addRow("Aspect ratio", self.artwork_crop)
         general_layout.addWidget(artwork_group)
 
@@ -805,13 +800,6 @@ class SettingsDialog(QDialog):
         self.status_bar_checkbox.setChecked(status_bar_visible)
         general_layout.addWidget(self.status_bar_checkbox)
 
-        backup_row = QHBoxLayout()
-        backup_row.addWidget(QLabel("Create a consistent SQLite backup.", general_tab))
-        backup = QPushButton("Backup Database…", general_tab)
-        backup.clicked.connect(self._backup)
-        backup_row.addStretch(1)
-        backup_row.addWidget(backup)
-        general_layout.addLayout(backup_row)
         general_layout.addStretch(1)
         self.tabs.addTab(general_tab, "General")
 
@@ -832,11 +820,18 @@ class SettingsDialog(QDialog):
 
         library_tab = QWidget(self.tabs)
         library_layout = QVBoxLayout(library_tab)
-        library_layout.addWidget(QLabel("Libraries and maintenance", library_tab))
-        library_row = QHBoxLayout()
-        library_row.addWidget(
-            self._library_button("manage_libraries", "Manage Libraries…", library_tab)
+        from trackstash.ui.library_manager import LibraryManagerPanel
+
+        panel_service = service or LibraryService(database)
+        self.library_panel = LibraryManagerPanel(
+            database,
+            panel_service,
+            current_library_id,
+            library_tab,
         )
+        library_layout.addWidget(self.library_panel)
+
+        library_row = QHBoxLayout()
         library_row.addWidget(
             self._library_button("find_duplicates", "Find Duplicates…", library_tab)
         )
@@ -845,24 +840,30 @@ class SettingsDialog(QDialog):
 
         selection_group = QGroupBox("Current selection", library_tab)
         selection_grid = QGridLayout(selection_group)
-        selection_actions = (
-            ("organize", "Organize…"),
-            ("delete", "Delete…"),
-            ("set_cover", "Set Cover…"),
-            ("remove_cover", "Remove Cover"),
-            ("extract_cover", "Extract Cover…"),
-        )
-        for index, (key, label) in enumerate(selection_actions):
-            button = self._library_button(key, label, selection_group, enabled=selection_available)
+        for index, (key, label) in enumerate(
+            (
+                ("organize", "Organize…"),
+                ("delete", "Delete…"),
+                ("set_cover", "Set Cover…"),
+                ("remove_cover", "Remove Cover"),
+                ("extract_cover", "Extract Cover…"),
+            )
+        ):
+            button = self._library_button(key, label, selection_group)
+            button.setEnabled(selection_available)
             selection_grid.addWidget(button, index // 2, index % 2)
         library_layout.addWidget(selection_group)
-        hint = QLabel(
-            "Organize, delete, and cover actions apply to the current selection in "
-            "the main window.",
-            library_tab,
-        )
-        hint.setWordWrap(True)
-        library_layout.addWidget(hint)
+
+        database_group = QGroupBox("Database", library_tab)
+        database_layout = QVBoxLayout(database_group)
+        database_row = QHBoxLayout()
+        database_row.addWidget(QLabel("Create a consistent SQLite backup.", database_group))
+        database_row.addStretch(1)
+        self.backup_button = QPushButton("Backup Database…", database_group)
+        self.backup_button.clicked.connect(self._backup)
+        database_row.addWidget(self.backup_button)
+        database_layout.addLayout(database_row)
+        library_layout.addWidget(database_group)
         library_layout.addStretch(1)
         self.tabs.addTab(library_tab, "Library")
 
@@ -875,16 +876,8 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def _library_button(
-        self,
-        key: str,
-        text: str,
-        parent: QWidget,
-        *,
-        enabled: bool = True,
-    ) -> QPushButton:
+    def _library_button(self, key: str, text: str, parent: QWidget) -> QPushButton:
         button = QPushButton(text, parent)
-        button.setEnabled(enabled)
         button.clicked.connect(
             lambda _checked=False, action=key: self._request_library_action(action)
         )
@@ -910,7 +903,7 @@ class SettingsDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Backup failed", str(exc))
 
-    def values(self) -> tuple[str, list[str], str, str, bool, bool, bool, int, int, bool]:
+    def values(self) -> tuple[str, list[str], str, str, bool, bool, bool, int, int, str]:
         visible = [key for key, check in self.column_checks.items() if check.isChecked()]
         return (
             self.template_edit.text().strip() or DEFAULT_TEMPLATE,
@@ -922,7 +915,7 @@ class SettingsDialog(QDialog):
             self.preserve_mtime_checkbox.isChecked(),
             self.artwork_max_size.value(),
             self.artwork_quality.value(),
-            bool(self.artwork_crop.currentData()),
+            str(self.artwork_crop.currentData() or "crop"),
         )
 
 
@@ -940,7 +933,7 @@ class AutoNumberDialog(QDialog):
         layout.addWidget(self.per_disc)
         row = QHBoxLayout()
         row.addWidget(QLabel("Start at", self))
-        self.start = QSpinBox(self)
+        self.start = NoWheelSpinBox(self)
         self.start.setRange(1, 999)
         self.start.setValue(1)
         row.addWidget(self.start)

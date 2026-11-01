@@ -307,7 +307,7 @@ refactoring. Priorities below are relative to the post-v1 phase.
 
 | ID | Priority | Requirement |
 |---|---|---|
-| SET-01 | P0 | Settings MUST cover database location, backup retention, default ID3 version, import template defaults, album grid sorting, status-bar visibility, strong ordering, mtime preservation, artwork compression, automatic organization, and default deletion behavior. |
+| SET-01 | P0 | Settings MUST cover database location, backup retention, default ID3 version, import template defaults, album grid sorting, status-bar visibility, strong ordering, mtime preservation, artwork compression/aspect mode, automatic organization, and default deletion behavior. |
 | SET-02 | P1 | The database MUST be backed up and restorable from the application. |
 | SET-03 | P1 | The user SHOULD be able to export and import settings. |
 | SET-04 | P1 | A diagnostics bundle (logs, versions, database statistics; no personal metadata) SHOULD be exportable. |
@@ -464,8 +464,7 @@ segments. Tokens resolve from the edited metadata, not only the on-disk state.
 Unknown tokens are rejected during validation.
 
 The default import and organization template is
-`{album_artist}/{album}/{disc_prefix}{track:02} {title}` (D-18). `{disc_prefix}` expands to `01-` only for multi-disc albums, so disc numbers prefix the track filename instead of creating folders. `{disc_dir}` remains available for templates that prefer a `Disc N/` folder. It is configurable per library
-and editable in the import wizard.
+`{album_artist}/{album}/{disc_prefix}{track:02} {title}` (D-18). `{disc_prefix}` expands to `01-` only for multi-disc albums, so disc numbers prefix the track filename instead of creating folders. `{disc_dir}` remains available for templates that prefer a `Disc N/` folder. It is configured in Settings and used by import, organization, and strong ordering.
 
 ### 7.4 Tracks-compatible identity
 
@@ -554,6 +553,8 @@ Unsupported files are never modified.
   configurable in Settings.
 - **Status bar:** shows the active library, track count, and selection count. It
   is enabled by default and configurable in Settings.
+- **Wheel safety:** spin boxes and combo boxes MUST only change on wheel input
+  while they have keyboard focus, so scrolling the page cannot alter values.
 - **Strong ordering:** tag edits that change the destination path MUST move the
   file immediately using the organization template; the move is journaled
   separately so it can be undone. Enabled by default.
@@ -568,13 +569,16 @@ Unsupported files are never modified.
   and embedded on Save, replacing all existing artwork.
 - **Action bar:** no main menu bar. Import, undo/redo, refresh, format, artwork
   filtering, view switching, and Settings live in the top bar.
-- **Import:** a top-bar Import… button. Scans, adding libraries, relocation, and
-  ReKey live in Settings → Library → Manage Libraries.
+- **Import:** a top-bar Import… button. Library identity, scans, adding libraries,
+  relocation, ReKey, enable/disable, and removal live directly in the
+  Settings → Library panel.
 - **Albums view:** multi-select with drag or ⌘-click for batch tag editing.
+  `Cmd+[` / `Ctrl+[` returns from a filtered album view to the Albums grid.
 - **Track context menu:** Edit Tags, Go to Album, Open, Open with, Delete, and
   Show in Finder.
 - **Import wizard:** source picker, tag preview/edit, copy or move mode, destination
-  template preview, collision and duplicate handling, per-file progress, and undo.
+  preview using the organization template from Settings, collision and duplicate
+  handling, per-file progress, and undo.
 - **Batch editor:** tri-state fields, mixed-value indicators, transform actions,
   auto-numbering, and a diff preview before saving.
 - **Preview dialog:** per-file before/after values, path changes, old and new
@@ -582,8 +586,8 @@ Unsupported files are never modified.
   confirmation.
 - **Delete dialog:** index-only versus index plus system Trash, file list and
   sizes, and a clear statement of which outcome is reversible.
-- **Library Manager:** library identity, namespace, Quick/Full Scan, relocation,
-  ReKey, enable/disable, and removal.
+- **Settings → Library:** embedded library selector, identity and namespace,
+  Quick/Full Scan, relocation, ReKey, enable/disable, and removal.
 - **Progress center:** running and completed operations, cancellable, with a
   per-file error list and an undo action where the operation is reversible.
 
@@ -653,8 +657,8 @@ TrackStash is a native desktop application built with Python 3.12+ and PySide6
   first track only when the album enters the viewport, then cached in memory with
   a bounded LRU. No cover files are written to disk; `ts_artwork` tracks per-track
   embedded artwork metadata and `albums.artwork` stays `NULL`. New artwork is
-  normalized to JPEG (default 1000 px long edge, quality 90) and optionally
-  cropped to a square before embedding.
+  normalized to JPEG (default 1000 px long edge, quality 90) with Crop to square,
+  Fit to square, or Original aspect ratio before embedding.
 - **Safety:** the journal records prior tag state, artwork, paths, and IDs before
   any mutation. Imports, moves, organization, tag writes, and index deletions are
   journaled. Index-only deletes are undoable; files moved to the macOS Trash are
@@ -768,7 +772,7 @@ to be decided.
 | D-15 | Schema reuse | **Tracks-compatible `libraries`, `artists`, `albums`, and `songs` tables plus `ts_*` extension tables.** |
 | D-16 | Code reuse | **Port/borrow Tracks/WebTracks methods for compatibility** (identity, enumeration, quick/full scan, upsert, missing review, on-demand artwork loading); no runtime dependency on either project. |
 | D-17 | Audio preview | **Not in v1.** No playback or preview is implemented; the decision can be revisited later. |
-| D-18 | Default import template | **`{album_artist}/{album}/{disc_prefix}{track:02} {title}`**, where `{disc_prefix}` adds `01-` before the track number only for multi-disc albums. Configurable per library and editable in the import wizard. |
+| D-18 | Default import template | **`{album_artist}/{album}/{disc_prefix}{track:02} {title}`**, where `{disc_prefix}` adds `01-` before the track number only for multi-disc albums. Configured in Settings and shared by Import, Organize, and strong ordering. |
 | D-19 | Default library location | **`~/Music/TrackStash`**, created on first run and changeable in settings. |
 | D-20 | Online metadata | **Not implemented.** TrackStash never performs online metadata lookup; tags come from files, imports, and user edits. |
 | D-21 | Playlist import | **Post-M0.** Importing playlists (M3U/M3U8/PLS and similar) is planned after M0 and is not part of the scaffold; milestone placement is TBD. |

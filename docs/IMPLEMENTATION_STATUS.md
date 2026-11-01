@@ -26,7 +26,7 @@
 - Metadata round-trips cover FLAC, MP3, M4A, OGG, Opus, WAV, AIFF, and WavPack.
 - Bitrates are stored and displayed in Kbps; schema v2 migrates pre-existing values.
 - Schema v3 stores track and disc values as text and migrates existing libraries.
-- The interface uses Qt Fusion styling, a menu-less action bar, and Settings-hosted library actions.
+- The interface uses Qt Fusion styling, a menu-less action bar, and Settings-hosted library and database management.
 - Album artwork is loaded asynchronously from embedded tags for visible albums; there is no cover cache on disk.
 - The status bar shows library and selection counts, defaults to visible, and can be disabled in Settings.
 - Track and disc values are stored as text, matching tag semantics.
@@ -34,8 +34,11 @@
 - Album grid sorting defaults to date added descending and is configurable in Settings.
 - Strong ordering moves files immediately after path-affecting tag edits; mtime preservation is enabled by default.
 - Pending artwork paste/add/delete is normalized and written on Save; all existing artwork is replaced or removed.
+- Artwork supports Crop to square, Fit to square, and Original aspect ratio modes.
+- Spin boxes and combo boxes ignore mouse-wheel changes unless focused.
 - The left editor width defaults to 280 px, is user-resizable, and persists between launches.
 - Imports copy by default or move on request; sources are untouched in copy mode.
+- Import destinations follow the organization template from Settings; per-import tag overrides remain available.
 - The import dialog accepts folders or individual files and warns before very large imports.
 - Tag edits update files and DB, verify by re-reading, and support undo/redo.
 - Organization recomputes song UUIDs from the new relative paths and remaps all
@@ -49,7 +52,7 @@
 Test status at the time of writing:
 
 ```text
-84 passed, 2 skipped (default suite)
+93 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 

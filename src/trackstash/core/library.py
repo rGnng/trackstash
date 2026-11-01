@@ -237,7 +237,7 @@ class LibraryService:
         preserve_mtime: bool = True,
         artwork_max_size: int = 1000,
         artwork_quality: int = 90,
-        artwork_crop_square: bool = True,
+        artwork_aspect: str = "crop",
     ) -> None:
         self.db = db
         self.default_template = default_template
@@ -245,7 +245,7 @@ class LibraryService:
         self.preserve_mtime = preserve_mtime
         self.artwork_max_size = artwork_max_size
         self.artwork_quality = artwork_quality
-        self.artwork_crop_square = artwork_crop_square
+        self.artwork_aspect = artwork_aspect
 
     # ------------------------------------------------------------------
     # Import
@@ -1112,7 +1112,7 @@ class LibraryService:
                 data,
                 max_size=self.artwork_max_size,
                 quality=self.artwork_quality,
-                crop_square=self.artwork_crop_square,
+                aspect=self.artwork_aspect,
             )
         except ValueError as exc:
             return [str(exc)]

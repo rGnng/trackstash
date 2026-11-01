@@ -13,10 +13,12 @@ consistent without cloud dependencies.
 
 ## Features
 
-- **Managed library.** One current library at a time, selected from a native
-  dropdown. A Library Manager window handles adding, Quick/Full Scan, relocation,
-  ReKey, enable/disable, and index removal. Imports copy by default or move on
-  request from File → Import…, with a tag-driven destination template.
+- **Managed library.** One current library at a time. Settings → Library embeds
+  the library selector and identity panel plus adding, Quick/Full Scan,
+  relocation, ReKey, enable/disable, and index removal. Imports copy by default
+  or move on request from the top-bar Import… button, with destinations following
+  the organization template configured in Settings; tag overrides can be applied
+  per import.
 - **Track context menu.** Edit Tags, Go to Album, Open, Open with, Delete, and
   Show in Finder.
 - **Tracks and Albums views.** The app opens on the album grid; a compact
@@ -25,13 +27,16 @@ consistent without cloud dependencies.
   `Bitrate` in Kbps, and more). Album covers resize within a fixed-gap grid to
   fill the viewport; the grid sorts by date added descending by default and the
   sort field/order is configurable in Settings. Double-click an album to filter
-  tracks; select multiple albums for batch editing.
+  tracks; select multiple albums for batch editing. `Cmd+[` / `Ctrl+[` returns
+  from a filtered album to the Albums grid.
 - **Consistent Qt interface.** The app uses Qt's Fusion style and a menu-less
   action bar, so buttons, menus, and other controls share one appearance instead
   of mixing native macOS and Qt-drawn widgets. Settings and library actions are
   available from the gear button. The window remembers its size between launches.
   A status bar shows the active library and selection count; it is on by default
-  and can be disabled in Settings.
+  and can be disabled in Settings. Numeric and dropdown controls ignore wheel
+  input unless they have keyboard focus, preventing accidental changes while
+  scrolling.
 - **Configurable columns.** Right-click the track header to show or hide columns,
   auto-fit all widths, or drag sections. Order, width, and visibility persist and
   are also editable in Settings.
@@ -42,7 +47,10 @@ consistent without cloud dependencies.
   selections show shared values and italic `Multiple` placeholders, so one field
   can be applied to the whole selection. Batch edits and per-disc auto-numbering
   are also available from the track and album context menus.
-- **Artwork.** View, embed, replace, remove, and extract front-cover artwork. Covers are read from embedded tags on demand for visible albums; there is no disk cover cache.
+- **Artwork.** View, embed, replace, remove, and extract front-cover artwork.
+  Covers are read from embedded tags on demand for visible albums; there is no
+  disk cover cache. New artwork is normalized to JPEG with Crop to square,
+  Fit to square, or Original aspect ratio modes.
 - **Organization.** Rename and move files with a token template, live preview,
   collision detection, UUID remapping, journaling, and undo. Strong ordering is
   on by default: tag changes that affect the destination move the file

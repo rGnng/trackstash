@@ -194,20 +194,73 @@ def test_album_grid_loads_cover_only_on_decoration(
     assert decoration is not None
 
 
-def test_album_grid_fills_viewport_with_fixed_gaps(
-    qtbot: QtBot, tmp_path: Path, audio_factory: Path
-) -> None:
+def test_track_column_layout_round_trip(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
+    from trackstash.ui.models import COLUMNS
+
     database, _library = _library_with_tracks(tmp_path, audio_factory)
     window = MainWindow(database)
     qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    keys = [key for _, key in COLUMNS]
+    header = window.table.horizontalHeader()
+    header.moveSection(header.visualIndex(keys.index("title")), 2)
+    header.resizeSection(keys.index("title"), 333)
+    window._set_column_visible("codec", False)
+    window.close()
+
+    reopened = MainWindow(database)
+    qtbot.addWidget(reopened)
+    reopened.show()
+    reopened_header = reopened.table.horizontalHeader()
+    order = [keys[reopened_header.logicalIndex(i)] for i in range(len(keys))]
+    assert order.index("title") == 2
+    assert reopened.table.columnWidth(keys.index("title")) == 333
+    assert reopened.table.isColumnHidden(keys.index("codec"))
+
+
+def test_back_to_albums_shortcut(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
+    from PySide6.QtGui import QKeySequence
+
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window._album_activated(window.album_model.index(0, 0))
+    assert window.tabs.currentIndex() == 0
+    assert window._album_filter_id is not None
+
+    assert window.back_to_albums_action.shortcut() == QKeySequence("Ctrl+[")
+    window.back_to_albums_action.trigger()
+    assert window.tabs.currentIndex() == 1
+    assert window._album_filter_id is None
+
+
+def test_album_grid_fills_viewport_with_fixed_gaps(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from trackstash.core.db import AlbumRow
+
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.album_model.set_albums(
+        [
+            AlbumRow(f"album-{index}", f"Album {index}", "Artist", "2024", 1, None, "")
+            for index in range(20)
+        ]
+    )
+
+    window._update_album_grid(1000)
+    assert window.album_view.iconSize().width() == 213
+    assert window.album_view.spacing() == 22
 
     window._update_album_grid(1100)
-    assert window.album_view.iconSize().width() == 192
-    assert window.album_view.spacing() == 22
+    assert window.album_view.iconSize().width() == 238
 
-    window._update_album_grid(940)
-    assert window.album_view.iconSize().width() == 160
-    assert window.album_view.spacing() == 22
+    window._update_album_grid(1200)
+    assert window.album_view.iconSize().width() == 204
 
 
 def test_album_grid_does_not_show_year(qtbot: QtBot) -> None:
@@ -243,7 +296,7 @@ def test_qt_top_bar_replaces_menu(qtbot: QtBot, tmp_path: Path) -> None:
     assert window.service.preserve_mtime is True
     assert window.service.artwork_max_size == 1000
     assert window.service.artwork_quality == 90
-    assert window.service.artwork_crop_square is True
+    assert window.service.artwork_aspect == "crop"
     assert not hasattr(window, "about_action")
     assert not hasattr(window, "help_action")
     assert not hasattr(window, "quit_action")
@@ -274,17 +327,22 @@ def test_inline_editor_and_column_persistence(
     assert "codec" in columns
     codec_index = columns.index("codec")
     bitrate_index = columns.index("bitrate")
+    assert "path" not in window.visible_columns()
+    assert window.table.isColumnHidden(columns.index("path"))
     window.model.data(window.model.index(0, bitrate_index))
     assert "Kbps" in str(window.model.data(window.model.index(0, bitrate_index)))
     assert window.table.horizontalHeader().sectionsMovable()
 
     window._set_column_visible("codec", False)
+    window._set_column_visible("path", True)
     assert "codec" not in window.visible_columns()
+    assert "path" in window.visible_columns()
     assert database.get_setting("track_columns")
 
     reopened = MainWindow(database)
     qtbot.addWidget(reopened)
     assert "codec" not in reopened.visible_columns()
+    assert "path" in reopened.visible_columns()
     assert reopened.table.isColumnHidden(codec_index)
 
 
@@ -368,7 +426,43 @@ def test_settings_can_choose_track_columns(qtbot: QtBot, tmp_path: Path) -> None
     assert dialog.column_checks["path"].isChecked() is False
     assert dialog.values()[1] == ["title", "codec"]
     assert dialog.values()[2:4] == ("date_added", "desc")
-    assert dialog.values()[4:] == (True, True, True, 1000, 90, True)
+    assert dialog.values()[4:] == (True, True, True, 1000, 90, "crop")
+
+
+def test_settings_column_changes_persist(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
+    from trackstash.ui.dialogs import SettingsDialog
+    from trackstash.ui.models import COLUMNS
+
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    columns = [(key, label) for label, key in COLUMNS]
+    dialog = SettingsDialog(
+        database,
+        window.service.default_template,
+        columns,
+        window.visible_columns(),
+    )
+    qtbot.addWidget(dialog)
+    assert dialog.column_checks["path"].isChecked() is False
+    dialog.column_checks["path"].setChecked(True)
+    dialog.column_checks["codec"].setChecked(False)
+    window.set_visible_columns(dialog.values()[1])
+
+    reopened = MainWindow(database)
+    qtbot.addWidget(reopened)
+    assert "path" in reopened.visible_columns()
+    assert "codec" not in reopened.visible_columns()
+
+    again = SettingsDialog(
+        database,
+        reopened.service.default_template,
+        columns,
+        reopened.visible_columns(),
+    )
+    qtbot.addWidget(again)
+    assert again.column_checks["path"].isChecked()
+    assert again.column_checks["codec"].isChecked() is False
 
 
 def test_settings_contains_library_actions(qtbot: QtBot, tmp_path: Path) -> None:
@@ -380,13 +474,11 @@ def test_settings_contains_library_actions(qtbot: QtBot, tmp_path: Path) -> None
     dialog = SettingsDialog(
         database,
         "{artist}/{album}/{title}",
-        selection_available=True,
     )
     qtbot.addWidget(dialog)
     assert dialog.tabs.count() == 3
     assert dialog.status_bar_checkbox.isChecked()
     assert set(dialog.library_buttons) == {
-        "manage_libraries",
         "find_duplicates",
         "organize",
         "delete",
@@ -394,18 +486,14 @@ def test_settings_contains_library_actions(qtbot: QtBot, tmp_path: Path) -> None
         "remove_cover",
         "extract_cover",
     }
-    dialog.library_buttons["organize"].click()
-    assert dialog.requested_action == "organize"
+    assert dialog.library_panel.library_combo.count() == 0
+    library_tab = dialog.tabs.widget(2)
+    general_tab = dialog.tabs.widget(0)
+    assert library_tab.isAncestorOf(dialog.backup_button)
+    assert not general_tab.isAncestorOf(dialog.backup_button)
+    dialog.library_buttons["find_duplicates"].click()
+    assert dialog.requested_action == "find_duplicates"
     assert dialog.result() == QDialog.DialogCode.Accepted
-
-    empty = SettingsDialog(
-        database,
-        "{artist}/{album}/{title}",
-        selection_available=False,
-    )
-    qtbot.addWidget(empty)
-    assert empty.library_buttons["manage_libraries"].isEnabled()
-    assert not empty.library_buttons["organize"].isEnabled()
 
 
 def test_status_bar_defaults_and_can_be_hidden(
@@ -427,6 +515,25 @@ def test_status_bar_defaults_and_can_be_hidden(
     qtbot.addWidget(hidden)
     hidden.show()
     assert not hidden.statusBar().isVisible()
+
+
+def test_settings_embeds_library_manager(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
+    from trackstash.ui.dialogs import SettingsDialog
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    service = LibraryService(database)
+    dialog = SettingsDialog(
+        database,
+        "{artist}/{album}/{title}",
+        service=service,
+        current_library_id=library.id,
+    )
+    qtbot.addWidget(dialog)
+    panel = dialog.library_panel
+    assert panel.library_combo.count() == 1
+    assert panel.library_combo.currentData() == library.id
+    assert panel.path_value.text() == library.path
+    assert "manage_libraries" not in dialog.library_buttons
 
 
 def test_inline_save_and_table_sorting(
@@ -640,6 +747,51 @@ def test_auto_fit_all_columns(qtbot: QtBot, tmp_path: Path, audio_factory: Path)
     window.refresh_libraries()
     window._auto_fit_all_columns()
     assert database.get_setting("track_columns")
+
+
+def test_added_time_column_is_visible_and_formatted(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    import re
+
+    from trackstash.ui.models import COLUMNS
+
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.tracks_view_button.click()
+    keys = [key for _, key in COLUMNS]
+    added_index = keys.index("added")
+    assert "added" in window.visible_columns()
+    text = str(window.model.data(window.model.index(0, added_index)))
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", text)
+
+
+def test_added_column_is_migrated_into_old_column_config(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    import json
+
+    from trackstash.ui.models import COLUMNS
+
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    keys = [key for _, key in COLUMNS]
+    old_visible = [key for key in keys if key not in {"added", "album_artist", "path"}]
+    database.set_setting(
+        "track_columns",
+        json.dumps(
+            {
+                "visible": old_visible,
+                "order": [key for key in keys if key != "added"],
+                "widths": {key: 100 for key in keys if key != "added"},
+            }
+        ),
+    )
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    assert "added" in window.visible_columns()
 
 
 def test_track_and_disc_accept_text(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:

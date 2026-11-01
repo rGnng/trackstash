@@ -1,4 +1,4 @@
-"""Library management window: add, scan, relocate, rekey, enable, remove."""
+"""Library management panel: add, scan, relocate, rekey, enable, remove."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -25,10 +24,11 @@ from PySide6.QtWidgets import (
 from trackstash.core.db import Database, Library
 from trackstash.core.library import LibraryService
 from trackstash.ui.dialogs import MissingFilesDialog
+from trackstash.ui.widgets import NoWheelComboBox
 
 
-class LibraryManagerDialog(QDialog):
-    """Manage the currently selected managed library."""
+class LibraryManagerPanel(QWidget):
+    """Embedded library selector and maintenance controls."""
 
     changed = Signal()
 
@@ -43,15 +43,13 @@ class LibraryManagerDialog(QDialog):
         self.database = database
         self.service = service
         self.current_library_id = current_library_id
-        self.setWindowTitle("Library Manager")
-        self.setMinimumWidth(620)
-        self.resize(680, 460)
         self._libraries: list[Library] = []
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         selector = QHBoxLayout()
         selector.addWidget(QLabel("Library", self))
-        self.library_combo = QComboBox(self)
+        self.library_combo = NoWheelComboBox(self)
         self.library_combo.setMinimumWidth(320)
         self.library_combo.currentIndexChanged.connect(self._selection_changed)
         selector.addWidget(self.library_combo, 1)
@@ -97,12 +95,6 @@ class LibraryManagerDialog(QDialog):
         secondary.addWidget(self.remove_button)
         secondary.addStretch(1)
         layout.addLayout(secondary)
-        layout.addStretch(1)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
-        layout.addWidget(buttons)
         self.refresh()
 
     def selected_library(self) -> Library | None:
@@ -288,3 +280,40 @@ class LibraryManagerDialog(QDialog):
         self.current_library_id = None
         self.refresh()
         self.changed.emit()
+
+
+class LibraryManagerDialog(QDialog):
+    """Standalone wrapper around :class:`LibraryManagerPanel`."""
+
+    changed = Signal()
+
+    def __init__(
+        self,
+        database: Database,
+        service: LibraryService,
+        current_library_id: str | None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Library Manager")
+        self.setMinimumWidth(620)
+        self.resize(680, 460)
+        layout = QVBoxLayout(self)
+        self.panel = LibraryManagerPanel(database, service, current_library_id, self)
+        self.panel.changed.connect(self.changed.emit)
+        layout.addWidget(self.panel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
+        self.library_combo = self.panel.library_combo
+        self.quick_button = self.panel.quick_button
+        self.full_button = self.panel.full_button
+
+    @property
+    def current_library_id(self) -> str | None:
+        return self.panel.current_library_id
+
+    @current_library_id.setter
+    def current_library_id(self, value: str | None) -> None:
+        self.panel.current_library_id = value

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from datetime import datetime
 
 from PySide6.QtCore import (
     QAbstractListModel,
@@ -33,6 +34,7 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("Codec", "codec"),
     ("Bitrate", "bitrate"),
     ("Duration", "duration"),
+    ("Added", "added"),
     ("Path", "path"),
 )
 
@@ -67,7 +69,7 @@ class TrackTableModel(QAbstractTableModel):
         track = self._tracks[index.row()]
         column = COLUMNS[index.column()][1]
         if role == Qt.ItemDataRole.DisplayRole:
-            value = getattr(track, column)
+            value = track.date_added if column == "added" else getattr(track, column)
             if column == "track":
                 return (
                     f"{track.track}/{track.track_total}" if track.track_total else str(track.track)
@@ -78,6 +80,10 @@ class TrackTableModel(QAbstractTableModel):
                 return f"{track.bitrate} Kbps" if track.bitrate else ""
             if column == "duration":
                 return _duration_text(track.duration)
+            if column == "added":
+                if not track.date_added:
+                    return ""
+                return datetime.fromtimestamp(track.date_added).strftime("%Y-%m-%d %H:%M")
             return str(value or "")
         if role == Qt.ItemDataRole.ToolTipRole:
             return track.path
@@ -132,11 +138,11 @@ class TrackTableModel(QAbstractTableModel):
 
 
 def _sort_key(track: Track, field: str) -> str | float | tuple[int, str]:
-    value = getattr(track, field)
+    value = track.date_added if field == "added" else getattr(track, field)
     if field in {"track", "disc"}:
         text = str(value or "")
         return (int(text) if text.isdigit() else 0, text)
-    if field in {"bitrate", "duration"}:
+    if field in {"bitrate", "duration", "added"}:
         return float(value or 0)
     if field == "year":
         return str(value)

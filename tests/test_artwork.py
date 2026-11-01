@@ -16,14 +16,21 @@ def _png(width: int, height: int) -> bytes:
 
 
 def test_artwork_crops_square_and_limits_long_edge() -> None:
-    normalized = normalize_artwork(_png(2000, 1000), max_size=1000, quality=90, crop_square=True)
+    normalized = normalize_artwork(_png(2000, 1000), max_size=1000, quality=90, aspect="crop")
     with Image.open(BytesIO(normalized)) as image:
         assert image.format == "JPEG"
         assert image.size == (1000, 1000)
 
 
 def test_artwork_can_preserve_original_aspect_ratio() -> None:
-    normalized = normalize_artwork(_png(2000, 1000), max_size=1000, quality=90, crop_square=False)
+    normalized = normalize_artwork(_png(2000, 1000), max_size=1000, quality=90, aspect="original")
     with Image.open(BytesIO(normalized)) as image:
         assert image.format == "JPEG"
         assert image.size == (1000, 500)
+
+
+def test_artwork_can_fit_whole_image_into_square() -> None:
+    normalized = normalize_artwork(_png(2000, 1000), max_size=1000, quality=90, aspect="fit")
+    with Image.open(BytesIO(normalized)) as image:
+        assert image.format == "JPEG"
+        assert image.size == (1000, 1000)

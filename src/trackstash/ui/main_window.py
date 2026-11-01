@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
-    QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -66,12 +65,15 @@ from trackstash.ui.dialogs import (
     TagPreviewDialog,
 )
 from trackstash.ui.editor import TrackInfoEditor
-from trackstash.ui.library_manager import LibraryManagerDialog
 from trackstash.ui.models import COLUMNS, AlbumGridModel, TrackTableModel
+from trackstash.ui.widgets import NoWheelComboBox
 
+COLUMN_CONFIG_VERSION = 2
 ALBUM_MIN_COVER = 158
+ALBUM_MAX_COVER = 240
 ALBUM_SPACING = 22
 ALBUM_ITEM_MARGIN = 6
+ALBUM_COVER_SAFETY = 2
 
 
 class AlbumGridView(QListView):
@@ -107,6 +109,7 @@ DEFAULT_WIDTHS = {
     "codec": 65,
     "bitrate": 95,
     "duration": 55,
+    "added": 120,
     "path": 220,
 }
 
@@ -136,7 +139,12 @@ class MainWindow(QMainWindow):
         except ValueError:
             self.service.artwork_max_size = 1000
             self.service.artwork_quality = 90
-        self.service.artwork_crop_square = db.get_setting("artwork_crop_square", "1") != "0"
+        artwork_aspect = db.get_setting("artwork_aspect", "")
+        if artwork_aspect not in {"crop", "fit", "original"}:
+            legacy = db.get_setting("artwork_crop_square", "1")
+            artwork_aspect = "original" if legacy == "0" else "crop"
+            db.set_setting("artwork_aspect", artwork_aspect)
+        self.service.artwork_aspect = artwork_aspect
         self._album_sort = db.get_setting("album_sort_field", "date_added")
         self._album_sort_desc = db.get_setting("album_sort_order", "desc") != "asc"
         self._status_bar_visible = db.get_setting("status_bar_visible", "1") != "0"
@@ -181,6 +189,7 @@ class MainWindow(QMainWindow):
         self.refresh_libraries()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._save_column_config()
         self.db.set_setting("window_size", f"{self.width()}x{self.height()}")
         self.db.set_setting("editor_width", str(self.editor.width()))
         super().closeEvent(event)
@@ -192,10 +201,6 @@ class MainWindow(QMainWindow):
         self.import_action = QAction("Import…", self)
         self.import_action.setShortcut(QKeySequence("Ctrl+I"))
         self.import_action.triggered.connect(self.import_files)
-
-        self.library_manager_action = QAction("Library Manager…", self)
-        self.library_manager_action.setShortcut(QKeySequence("Ctrl+L"))
-        self.library_manager_action.triggered.connect(self.open_library_manager)
 
         self.organize_action = QAction("Organize…", self)
         self.organize_action.triggered.connect(self.organize)
@@ -245,6 +250,9 @@ class MainWindow(QMainWindow):
         self.refresh_action = QAction("Refresh", self)
         self.refresh_action.setShortcut(QKeySequence.StandardKey.Refresh)
         self.refresh_action.triggered.connect(self.refresh_tracks)
+        self.back_to_albums_action = QAction("Show All Albums", self)
+        self.back_to_albums_action.setShortcut(QKeySequence("Ctrl+["))
+        self.back_to_albums_action.triggered.connect(self.back_to_albums)
         refresh_icon = QIcon.fromTheme("view-refresh")
         if refresh_icon.isNull():
             refresh_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
@@ -261,7 +269,6 @@ class MainWindow(QMainWindow):
 
         for action in (
             self.import_action,
-            self.library_manager_action,
             self.organize_action,
             self.delete_action,
             self.duplicates_action,
@@ -277,6 +284,7 @@ class MainWindow(QMainWindow):
             self.albums_view_action,
             self.focus_search_action,
             self.refresh_action,
+            self.back_to_albums_action,
         ):
             self.addAction(action)
 
@@ -359,7 +367,7 @@ class MainWindow(QMainWindow):
         self.search_edit.textChanged.connect(self._search_changed)
         library_row.addWidget(self.search_edit)
 
-        self.format_filter = QComboBox(right)
+        self.format_filter = NoWheelComboBox(right)
         self.format_filter.addItem("All formats", "")
         for extension in ("FLAC", "MP3", "M4A", "OGG", "OPUS", "APE", "WV", "WAV", "AIFF"):
             self.format_filter.addItem(extension, extension)
@@ -433,6 +441,8 @@ class MainWindow(QMainWindow):
         self.model = TrackTableModel()
         self.table = QTableView(tracks_tab)
         self.table.setModel(self.model)
+        self.table.setFrameShape(QFrame.Shape.NoFrame)
+        self.table.setLineWidth(0)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setSortingEnabled(True)
@@ -557,13 +567,6 @@ class MainWindow(QMainWindow):
             self._album_return_id = None
         self.refresh_tracks()
 
-    def open_library_manager(self) -> None:
-        dialog = LibraryManagerDialog(self.db, self.service, self._current_library_id, self)
-        dialog.exec()
-        if dialog.current_library_id:
-            self._current_library_id = dialog.current_library_id
-        self.refresh_libraries()
-
     # ------------------------------------------------------------------
     # Track and album views
 
@@ -624,6 +627,7 @@ class MainWindow(QMainWindow):
             descending=self._album_sort_desc,
         )
         self.album_model.set_albums(albums)
+        self._update_album_grid()
         self._albums_dirty = False
 
     def _tab_changed(self, index: int) -> None:
@@ -642,15 +646,19 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "album_view"):
             return
         available = width if width is not None else self.album_view.viewport().width()
-        available = max(1, available)
-        pitch = ALBUM_MIN_COVER + ALBUM_ITEM_MARGIN + ALBUM_SPACING
-        columns = max(1, available // pitch)
-        cover = max(
-            1,
-            min(240, available // columns - ALBUM_ITEM_MARGIN - ALBUM_SPACING),
-        )
+        available = max(1, available - ALBUM_SPACING - ALBUM_ITEM_MARGIN)
+        gap = ALBUM_ITEM_MARGIN + ALBUM_SPACING + ALBUM_COVER_SAFETY
+        min_pitch = ALBUM_MIN_COVER + gap
+        max_pitch = ALBUM_MAX_COVER + gap
+        # Use the fewest columns that keep covers at or below the maximum, so
+        # covers grow with the window before another column is added.
+        columns = max(1, (available + max_pitch - 1) // max_pitch)
+        columns = min(columns, max(1, available // min_pitch))
+        columns = min(columns, max(1, self.album_model.rowCount()))
+        cover = max(1, min(ALBUM_MAX_COVER, available // columns - gap))
         self.album_model.set_cover_size(cover)
         self.album_view.setIconSize(QSize(cover, cover))
+        self.album_view.doItemsLayout()
 
     def _album_context_menu(self, position: QPoint) -> None:
         index = self.album_view.indexAt(position)
@@ -689,6 +697,10 @@ class MainWindow(QMainWindow):
         self.refresh_tracks()
         if self.model.rowCount():
             self.table.selectRow(0)
+
+    def back_to_albums(self) -> None:
+        if self.tabs.currentIndex() == 0 and self._album_filter_id is not None:
+            self.clear_album_filter()
 
     def clear_album_filter(self) -> None:
         return_id = self._album_return_id
@@ -1187,11 +1199,15 @@ class MainWindow(QMainWindow):
             preserve_mtime=self.service.preserve_mtime,
             artwork_max_size=self.service.artwork_max_size,
             artwork_quality=self.service.artwork_quality,
-            artwork_crop_square=self.service.artwork_crop_square,
-            selection_available=bool(self.selected_track_ids()),
+            artwork_aspect=self.service.artwork_aspect,
+            service=self.service,
+            current_library_id=self._current_library_id,
             parent=self,
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        result = dialog.exec()
+        self._current_library_id = dialog.library_panel.current_library_id
+        if result != QDialog.DialogCode.Accepted:
+            self.refresh_libraries()
             return
         (
             template,
@@ -1203,7 +1219,7 @@ class MainWindow(QMainWindow):
             preserve_mtime,
             artwork_max_size,
             artwork_quality,
-            artwork_crop_square,
+            artwork_aspect,
         ) = dialog.values()
         self.db.set_setting("default_template", template)
         self.db.set_setting("album_sort_field", album_sort)
@@ -1213,22 +1229,21 @@ class MainWindow(QMainWindow):
         self.db.set_setting("preserve_mtime", "1" if preserve_mtime else "0")
         self.db.set_setting("artwork_max_size", str(artwork_max_size))
         self.db.set_setting("artwork_quality", str(artwork_quality))
-        self.db.set_setting("artwork_crop_square", "1" if artwork_crop_square else "0")
+        self.db.set_setting("artwork_aspect", artwork_aspect)
         self.service.default_template = template
         self.service.strong_order = strong_order
         self.service.preserve_mtime = preserve_mtime
         self.service.artwork_max_size = artwork_max_size
         self.service.artwork_quality = artwork_quality
-        self.service.artwork_crop_square = artwork_crop_square
+        self.service.artwork_aspect = artwork_aspect
         self._album_sort = album_sort
         self._album_sort_desc = album_order != "asc"
         self._status_bar_visible = status_bar_visible
         self.statusBar().setVisible(status_bar_visible)
         self.set_visible_columns(visible)
-        self.refresh_albums()
+        self.refresh_libraries()
         self._update_status()
         actions = {
-            "manage_libraries": self.open_library_manager,
             "find_duplicates": self.find_duplicates,
             "organize": self.organize,
             "delete": self.delete_tracks,
@@ -1244,6 +1259,7 @@ class MainWindow(QMainWindow):
         keys = [key for _, key in COLUMNS]
         visible = [key for key in keys if key not in {"album_artist", "path"}]
         return {
+            "version": COLUMN_CONFIG_VERSION,
             "visible": visible,
             "order": keys,
             "widths": {key: DEFAULT_WIDTHS.get(key, 120) for key in keys},
@@ -1252,13 +1268,29 @@ class MainWindow(QMainWindow):
     def _load_column_config(self) -> None:
         raw = self.db.get_setting("track_columns", "")
         config = self.default_column_config()
+        version = 1
         if raw:
             try:
                 parsed = json.loads(raw)
                 if isinstance(parsed, dict):
                     config.update(parsed)
-            except json.JSONDecodeError:
+                    version = int(parsed.get("version", 1) or 1)
+            except (json.JSONDecodeError, TypeError, ValueError):
                 pass
+        if version < 2:
+            visible = config.get("visible")
+            if isinstance(visible, list) and "added" not in visible:
+                visible.append("added")
+            order = config.get("order")
+            if isinstance(order, list) and "added" not in order:
+                if "path" in order:
+                    order.insert(order.index("path"), "added")
+                else:
+                    order.append("added")
+            widths = config.get("widths")
+            if isinstance(widths, dict) and "added" not in widths:
+                widths["added"] = DEFAULT_WIDTHS.get("added", 120)
+        config["version"] = COLUMN_CONFIG_VERSION
         self._column_config = config
         self._apply_column_config()
         self._columns_ready = True
@@ -1317,7 +1349,12 @@ class MainWindow(QMainWindow):
             if width <= 0:
                 width = int(previous_widths.get(key, DEFAULT_WIDTHS.get(key, 120)))
             widths[key] = width
-        self._column_config = {"visible": visible, "order": order, "widths": widths}
+        self._column_config = {
+            "version": COLUMN_CONFIG_VERSION,
+            "visible": visible,
+            "order": order,
+            "widths": widths,
+        }
         self.db.set_setting("track_columns", json.dumps(self._column_config))
 
     def visible_columns(self) -> list[str]:
