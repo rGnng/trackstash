@@ -457,9 +457,7 @@ class MainWindow(QMainWindow):
 
         albums_tab = QWidget(self.tabs)
         albums_layout = QVBoxLayout(albums_tab)
-        # The icon delegate adds half a cell gap around each cover; 11 px here
-        # yields the reference 22 px visual inset used by the Tracks grid.
-        albums_layout.setContentsMargins(11, 11, 11, 11)
+        albums_layout.setContentsMargins(0, 0, 0, 0)
         self.album_model = AlbumGridModel()
         self.album_view = AlbumGridView(albums_tab)
         self.album_view.setModel(self.album_model)
