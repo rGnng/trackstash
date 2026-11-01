@@ -12,6 +12,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QPoint,
     QProcess,
+    QRect,
     QSize,
     Qt,
     QTimer,
@@ -21,9 +22,13 @@ from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QCloseEvent,
+    QColor,
     QDesktopServices,
+    QFontMetrics,
     QIcon,
     QKeySequence,
+    QPainter,
+    QPalette,
     QPixmap,
     QResizeEvent,
 )
@@ -45,6 +50,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableView,
     QToolButton,
     QVBoxLayout,
@@ -72,7 +79,8 @@ COLUMN_CONFIG_VERSION = 2
 ALBUM_MIN_COVER = 200
 ALBUM_MAX_COVER = 320
 ALBUM_SPACING = 22
-ALBUM_ITEM_MARGIN = 6
+ALBUM_ITEM_PADDING = 3
+ALBUM_ITEM_MARGIN = ALBUM_ITEM_PADDING * 2
 
 
 def album_cover_layout(width: int) -> tuple[int, int]:
@@ -109,6 +117,95 @@ class AlbumGridView(QListView):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._resize_timer.start()
+
+
+def _solid_palette_color(palette: QPalette, role: QPalette.ColorRole, fallback: str) -> QColor:
+    """Return a flat color even when the palette role holds a gradient brush."""
+    brush = palette.brush(role)
+    color = brush.color()
+    if color.isValid():
+        return color
+    gradient = brush.gradient()
+    if gradient is not None:
+        stops = gradient.stops()
+        if stops:
+            red = sum(stop[1].red() for stop in stops) // len(stops)
+            green = sum(stop[1].green() for stop in stops) // len(stops)
+            blue = sum(stop[1].blue() for stop in stops) // len(stops)
+            return QColor(red, green, blue)
+    return QColor(fallback)
+
+
+class AlbumItemDelegate(QStyledItemDelegate):
+    """Paint album cells with uniform padding and a flat selection fill."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._cover_size = ALBUM_MIN_COVER
+
+    def set_cover_size(self, size: int) -> None:
+        self._cover_size = max(1, int(size))
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        metrics = QFontMetrics(option.font)
+        text_height = metrics.height() * 2 + 2
+        return QSize(
+            self._cover_size + ALBUM_ITEM_PADDING * 2,
+            self._cover_size + text_height + ALBUM_ITEM_PADDING * 2,
+        )
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        painter.save()
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        palette = option.palette
+        selection_palette = (
+            option.widget.viewport().palette()
+            if isinstance(option.widget, QAbstractItemView) and option.widget.viewport() is not None
+            else palette
+        )
+        if selected:
+            # Match the checked view-switch buttons, which use palette(highlight).
+            painter.fillRect(
+                option.rect,
+                _solid_palette_color(
+                    selection_palette,
+                    QPalette.ColorRole.Highlight,
+                    "#314f78",
+                ),
+            )
+        content = option.rect.adjusted(
+            ALBUM_ITEM_PADDING,
+            ALBUM_ITEM_PADDING,
+            -ALBUM_ITEM_PADDING,
+            -ALBUM_ITEM_PADDING,
+        )
+        icon_rect = QRect(content.x(), content.y(), content.width(), self._cover_size)
+        icon = index.data(Qt.ItemDataRole.DecorationRole)
+        if isinstance(icon, QIcon):
+            icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
+        title, _, artist = str(index.data(Qt.ItemDataRole.DisplayRole) or "").partition("\n")
+        metrics = QFontMetrics(option.font)
+        line_height = metrics.height()
+        text_top = icon_rect.bottom() + 1
+        text_role = QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.Text
+        text_fallback = "#ffffff" if selected else "#e8e8e8"
+        text_palette = selection_palette if selected else palette
+        painter.setPen(_solid_palette_color(text_palette, text_role, text_fallback))
+        for offset, line in enumerate((title, artist)):
+            if not line:
+                continue
+            line_rect = QRect(
+                content.x(),
+                text_top + offset * line_height,
+                content.width(),
+                line_height,
+            )
+            painter.drawText(
+                line_rect,
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                metrics.elidedText(line, Qt.TextElideMode.ElideRight, content.width()),
+            )
+        painter.restore()
 
 
 DEFAULT_WIDTHS = {
@@ -488,14 +585,10 @@ class MainWindow(QMainWindow):
         self.album_model = AlbumGridModel()
         self.album_view = AlbumGridView(albums_tab)
         self.album_view.setModel(self.album_model)
+        self.album_delegate = AlbumItemDelegate(self.album_view)
+        self.album_view.setItemDelegate(self.album_delegate)
         self.album_view.setFrameShape(QFrame.Shape.NoFrame)
         self.album_view.setLineWidth(0)
-        self.album_view.setStyleSheet(
-            "QListView { selection-background-color: palette(highlight);"
-            " selection-color: palette(highlighted-text); }"
-            "QListView::item:selected { background-color: palette(highlight);"
-            " color: palette(highlighted-text); }"
-        )
         self.album_view.setViewMode(QListView.ViewMode.IconMode)
         self.album_view.setResizeMode(QListView.ResizeMode.Adjust)
         self.album_view.setMovement(QListView.Movement.Static)
@@ -731,6 +824,7 @@ class MainWindow(QMainWindow):
         width = width if width is not None else self.album_view.viewport().width()
         _, cover = album_cover_layout(width)
         self.album_model.set_cover_size(cover)
+        self.album_delegate.set_cover_size(cover)
         self.album_view.setIconSize(QSize(cover, cover))
         self.album_view.doItemsLayout()
 

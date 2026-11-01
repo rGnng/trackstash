@@ -409,6 +409,80 @@ def test_album_grid_cover_size_does_not_depend_on_album_count(
     assert few == many == 252
 
 
+def test_album_selection_color_is_flat_with_gradient_palette(qtbot: QtBot, tmp_path: Path) -> None:
+    from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPalette
+
+    from trackstash.ui.main_window import AlbumItemDelegate, _solid_palette_color
+
+    database = Database(tmp_path / "album-selection.sqlite")
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    assert isinstance(window.album_view.itemDelegate(), AlbumItemDelegate)
+
+    palette = QPalette()
+    gradient = QLinearGradient(0, 0, 0, 1)
+    gradient.setColorAt(0, QColor("#71a0c8"))
+    gradient.setColorAt(1, QColor("#3a5f88"))
+    palette.setBrush(QPalette.ColorRole.Highlight, QBrush(gradient))
+
+    color = _solid_palette_color(palette, QPalette.ColorRole.Highlight, "#000000")
+    assert color.isValid()
+    assert color.name() == "#557fa8"
+
+
+def test_album_selection_matches_view_switch_highlight(qtbot: QtBot, tmp_path: Path) -> None:
+    from PySide6.QtCore import QRect, QSize, Qt
+    from PySide6.QtGui import (
+        QColor,
+        QIcon,
+        QImage,
+        QPainter,
+        QPalette,
+        QPixmap,
+        QStandardItem,
+        QStandardItemModel,
+    )
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+
+    from trackstash.ui.main_window import AlbumItemDelegate
+
+    database = Database(tmp_path / "album-highlight.sqlite")
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    view = window.album_view
+    view_palette = view.palette()
+    view_palette.setColor(QPalette.ColorRole.Highlight, QColor("#0640c6"))
+    view.setPalette(view_palette)
+    viewport_palette = view.viewport().palette()
+    viewport_palette.setColor(QPalette.ColorRole.Highlight, QColor("#314f78"))
+    view.viewport().setPalette(viewport_palette)
+
+    model = QStandardItemModel()
+    item = QStandardItem("Album\nArtist")
+    pixmap = QPixmap(100, 100)
+    pixmap.fill(QColor("#444444"))
+    item.setIcon(QIcon(pixmap))
+    model.appendRow(item)
+    view.setModel(model)
+    delegate = AlbumItemDelegate(view)
+    delegate.set_cover_size(100)
+
+    image = QImage(120, 150, QImage.Format.Format_ARGB32)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 106, 140)
+    option.state = QStyle.StateFlag.State_Selected
+    option.palette = view.palette()
+    option.widget = view
+    option.font = view.font()
+    option.decorationSize = QSize(100, 100)
+    delegate.paint(painter, option, model.index(0, 0))
+    painter.end()
+
+    assert image.pixelColor(1, 1).name() == "#314f78"
+
+
 def test_album_context_menu_keeps_only_edit_and_delete(
     qtbot: QtBot, tmp_path: Path, audio_factory: Path
 ) -> None:
