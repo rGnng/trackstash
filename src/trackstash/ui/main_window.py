@@ -472,6 +472,7 @@ class MainWindow(QMainWindow):
         self.album_view.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.album_view.setIconSize(QSize(ALBUM_MIN_COVER, ALBUM_MIN_COVER))
         self.album_view.setSpacing(0)
+        self.album_view.setViewportMargins(0, 22, 0, 0)
         self.album_view.resize_callback = self._update_album_grid
         self.album_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.album_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
