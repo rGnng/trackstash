@@ -187,10 +187,7 @@ def _parse_value(key: str, text: str) -> object:
     if key in {"artists", "genres"}:
         return [part.strip() for part in text.split(",") if part.strip()]
     if key in {"track", "track_total", "disc", "disc_total"}:
-        try:
-            return int(text.strip() or 0)
-        except ValueError:
-            return 0
+        return text.strip()
     return text.strip()
 
 
@@ -211,8 +208,9 @@ class TagEditorDialog(QDialog):
         self.setWindowTitle("Edit Tags")
         self.setMinimumWidth(520)
 
-        tags = service.db.load_tag_set(self.track_ids[0]) if self.track_ids else None
-        all_tags = [service.db.load_tag_set(track_id) for track_id in self.track_ids]
+        tags_by_id = service.db.load_tag_sets(self.track_ids)
+        all_tags = [tags_by_id.get(track_id) for track_id in self.track_ids]
+        tags = all_tags[0] if all_tags else None
         single = len(self.track_ids) == 1
 
         layout = QVBoxLayout(self)

@@ -41,11 +41,41 @@ def test_application_uses_fusion_style(qtbot: QtBot) -> None:
     app = QApplication.instance()
     assert isinstance(app, QApplication)
     previous_style = app.style().objectName()
+    previous_palette = app.palette()
     try:
         configure_application(app)
         assert app.style().objectName().casefold() == "fusion"
     finally:
         app.setStyle(previous_style)
+        app.setPalette(previous_palette)
+
+
+def test_application_does_not_override_style_palette(qtbot: QtBot) -> None:
+    from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QApplication
+
+    from trackstash.app import configure_application
+
+    app = QApplication.instance()
+    assert isinstance(app, QApplication)
+    previous_style = app.style().objectName()
+    previous_palette = app.palette()
+    try:
+        app.setStyle("Fusion")
+        before = app.palette()
+        configure_application(app)
+        after = app.palette()
+        for role in (
+            QPalette.ColorRole.Base,
+            QPalette.ColorRole.AlternateBase,
+            QPalette.ColorRole.Window,
+            QPalette.ColorRole.Highlight,
+            QPalette.ColorRole.HighlightedText,
+        ):
+            assert after.color(role) == before.color(role)
+    finally:
+        app.setStyle(previous_style)
+        app.setPalette(previous_palette)
 
 
 def test_songs_track_and_disc_columns_are_text(tmp_path: Path) -> None:

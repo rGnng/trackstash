@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import (
+    QEvent,
     QItemSelectionModel,
     QModelIndex,
+    QObject,
+    QPersistentModelIndex,
     QPoint,
     QProcess,
     QRect,
@@ -22,7 +26,6 @@ from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QCloseEvent,
-    QColor,
     QDesktopServices,
     QFontMetrics,
     QIcon,
@@ -59,7 +62,7 @@ from PySide6.QtWidgets import (
 )
 
 from trackstash.core.db import Database, Library, Track
-from trackstash.core.library import LibraryService, content_hash
+from trackstash.core.library import LibraryService
 from trackstash.core.metadata import read_artwork
 from trackstash.core.template import DEFAULT_TEMPLATE, LEGACY_DEFAULT_TEMPLATE
 from trackstash.ui.dialogs import (
@@ -74,6 +77,11 @@ from trackstash.ui.dialogs import (
 )
 from trackstash.ui.editor import TrackInfoEditor
 from trackstash.ui.models import COLUMNS, AlbumGridModel, TrackTableModel
+from trackstash.ui.theme import (
+    SELECTION_HIGHLIGHT,
+    SELECTION_TEXT,
+    apply_selection_palette,
+)
 
 COLUMN_CONFIG_VERSION = 2
 ALBUM_MIN_COVER = 200
@@ -109,6 +117,7 @@ class AlbumGridView(QListView):
         self._resize_timer.setSingleShot(True)
         self._resize_timer.setInterval(60)
         self._resize_timer.timeout.connect(self._notify_resize)
+        self.viewport().installEventFilter(self)
 
     def _notify_resize(self) -> None:
         if self.resize_callback is not None:
@@ -118,22 +127,10 @@ class AlbumGridView(QListView):
         super().resizeEvent(event)
         self._resize_timer.start()
 
-
-def _solid_palette_color(palette: QPalette, role: QPalette.ColorRole, fallback: str) -> QColor:
-    """Return a flat color even when the palette role holds a gradient brush."""
-    brush = palette.brush(role)
-    color = brush.color()
-    if color.isValid():
-        return color
-    gradient = brush.gradient()
-    if gradient is not None:
-        stops = gradient.stops()
-        if stops:
-            red = sum(stop[1].red() for stop in stops) // len(stops)
-            green = sum(stop[1].green() for stop in stops) // len(stops)
-            blue = sum(stop[1].blue() for stop in stops) // len(stops)
-            return QColor(red, green, blue)
-    return QColor(fallback)
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.viewport() and event.type() == QEvent.Type.Resize:
+            self._resize_timer.start()
+        return super().eventFilter(watched, event)
 
 
 class AlbumItemDelegate(QStyledItemDelegate):
@@ -146,7 +143,11 @@ class AlbumItemDelegate(QStyledItemDelegate):
     def set_cover_size(self, size: int) -> None:
         self._cover_size = max(1, int(size))
 
-    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+    def sizeHint(
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> QSize:
         metrics = QFontMetrics(option.font)
         text_height = metrics.height() * 2 + 2
         return QSize(
@@ -154,25 +155,34 @@ class AlbumItemDelegate(QStyledItemDelegate):
             self._cover_size + text_height + ALBUM_ITEM_PADDING * 2,
         )
 
-    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         painter.save()
-        selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        palette = option.palette
-        selection_palette = (
-            option.widget.viewport().palette()
-            if isinstance(option.widget, QAbstractItemView) and option.widget.viewport() is not None
-            else palette
+        base_option = QStyleOptionViewItem(option)
+        self.initStyleOption(base_option, index)
+        base_option.state = option.state
+        # Keep a non-null icon and non-empty text so the style still paints the
+        # item background, then hide the decoration/text it would draw.
+        base_option.text = " "
+        if base_option.icon.isNull():
+            transparent = QPixmap(1, 1)
+            transparent.fill(Qt.GlobalColor.transparent)
+            base_option.icon = QIcon(transparent)
+        base_option.features &= ~QStyleOptionViewItem.ViewItemFeature.HasDecoration
+        style = (
+            base_option.widget.style() if base_option.widget is not None else QApplication.style()
         )
-        if selected:
-            # Match the checked view-switch buttons, which use palette(highlight).
-            painter.fillRect(
-                option.rect,
-                _solid_palette_color(
-                    selection_palette,
-                    QPalette.ColorRole.Highlight,
-                    "#314f78",
-                ),
-            )
+        style.drawControl(
+            QStyle.ControlElement.CE_ItemViewItem,
+            base_option,
+            painter,
+            base_option.widget,
+        )
+
         content = option.rect.adjusted(
             ALBUM_ITEM_PADDING,
             ALBUM_ITEM_PADDING,
@@ -187,10 +197,16 @@ class AlbumItemDelegate(QStyledItemDelegate):
         metrics = QFontMetrics(option.font)
         line_height = metrics.height()
         text_top = icon_rect.bottom() + 1
-        text_role = QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.Text
-        text_fallback = "#ffffff" if selected else "#e8e8e8"
-        text_palette = selection_palette if selected else palette
-        painter.setPen(_solid_palette_color(text_palette, text_role, text_fallback))
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        enabled = bool(option.state & QStyle.StateFlag.State_Enabled)
+        role = QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.Text
+        if not enabled:
+            group = QPalette.ColorGroup.Disabled
+        elif option.state & QStyle.StateFlag.State_Active:
+            group = QPalette.ColorGroup.Active
+        else:
+            group = QPalette.ColorGroup.Inactive
+        painter.setPen(option.palette.color(group, role))
         for offset, line in enumerate((title, artist)):
             if not line:
                 continue
@@ -283,11 +299,19 @@ class MainWindow(QMainWindow):
         self._search_timer.setInterval(250)
         self._search_timer.timeout.connect(self.refresh_tracks)
         self._albums_dirty = True
+        self._album_columns = 0
+        self._album_cover_size = 0
         self._current_library_id: str | None = None
+        self._library_name = ""
         self._album_filter_id: str | None = None
         self._album_filter_title = ""
         self._album_return_id: str | None = None
         self._libraries: list[Library] = []
+        self._artwork_cache: OrderedDict[str, tuple[float, int, str, tuple[bytes, str, int]]] = (
+            OrderedDict()
+        )
+        self._artwork_cache_bytes = 0
+        self._artwork_cache_limit = 32 * 1024 * 1024
         self._column_config: dict[str, object] = {}
         self._loading_columns = False
         self._columns_ready = False
@@ -439,8 +463,8 @@ class MainWindow(QMainWindow):
             " border-bottom-left-radius: 5px; }"
             "QPushButton#viewSwitchLast { border-left: none;"
             " border-top-right-radius: 5px; border-bottom-right-radius: 5px; }"
-            "QPushButton:checked { background-color: palette(highlight);"
-            " color: palette(highlighted-text); border-color: palette(highlight); }"
+            f"QPushButton:checked {{ background-color: {SELECTION_HIGHLIGHT};"
+            f" color: {SELECTION_TEXT}; border-color: {SELECTION_HIGHLIGHT}; }}"
         )
         self._view_button_group = QButtonGroup(right)
         self._view_button_group.setExclusive(True)
@@ -557,10 +581,10 @@ class MainWindow(QMainWindow):
         self.table.setSortingEnabled(True)
         self.table.setAlternatingRowColors(True)
         self.table.setStyleSheet(
-            "QTableView { selection-background-color: palette(highlight);"
-            " selection-color: palette(highlighted-text); }"
-            "QTableView::item:selected { background-color: palette(highlight);"
-            " color: palette(highlighted-text); }"
+            f"QTableView {{ selection-background-color: {SELECTION_HIGHLIGHT};"
+            f" selection-color: {SELECTION_TEXT}; }}"
+            f"QTableView::item:selected {{ background-color: {SELECTION_HIGHLIGHT};"
+            f" color: {SELECTION_TEXT}; }}"
         )
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
@@ -572,6 +596,10 @@ class MainWindow(QMainWindow):
         header.sectionResized.connect(self._column_layout_changed)
         header.sectionHandleDoubleClicked.connect(self._auto_fit_column)
         header.sectionDoubleClicked.connect(self._auto_fit_column)
+        self._column_save_timer = QTimer(self)
+        self._column_save_timer.setSingleShot(True)
+        self._column_save_timer.setInterval(250)
+        self._column_save_timer.timeout.connect(self._save_column_config)
         self.table.doubleClicked.connect(self.edit_tags)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._track_context_menu)
@@ -619,6 +647,8 @@ class MainWindow(QMainWindow):
         outer_layout.addWidget(splitter, 1)
 
         self.setCentralWidget(outer)
+
+        apply_selection_palette(self.album_view)
 
         self._load_column_config()
         self.table.horizontalHeader().sortIndicatorChanged.connect(self._track_sort_changed)
@@ -687,6 +717,7 @@ class MainWindow(QMainWindow):
         self._libraries = self.db.list_libraries()
         if not self._libraries:
             self._current_library_id = None
+            self._library_name = ""
             self._album_filter_id = None
             self._album_filter_title = ""
             self._album_return_id = None
@@ -702,6 +733,7 @@ class MainWindow(QMainWindow):
                 self._libraries[0],
             )
         self._current_library_id = current.id
+        self._library_name = current.name
         if previous != self._current_library_id:
             self._album_filter_id = None
             self._album_filter_title = ""
@@ -771,14 +803,11 @@ class MainWindow(QMainWindow):
             library_id=self._current_library_id,
             album_id=self._album_filter_id,
             query=query,
+            format_filter=self._format_filter or None,
+            missing_artwork=self._missing_artwork_only,
         )
-        if self._format_filter:
-            tracks = [track for track in tracks if track.format.upper() == self._format_filter]
-        if self._missing_artwork_only:
-            tracks = [track for track in tracks if not self._track_has_artwork(track)]
         self.model.set_tracks(tracks)
-        library = self.db.get_library(self._current_library_id)
-        self._library_label = library.name if library else "Library"
+        self._library_label = self._library_name or "Library"
         self._total_tracks = len(tracks)
         self._update_album_filter_ui()
         self._update_status()
@@ -814,7 +843,10 @@ class MainWindow(QMainWindow):
             self.albums_view_button.setChecked(index == 1)
             self.tracks_view_button.setChecked(index == 0)
         if index == 1:
-            self.refresh_albums()
+            if self._albums_dirty:
+                self.refresh_albums()
+            else:
+                self._update_album_grid()
         self._selection_changed()
         self._update_status()
 
@@ -822,7 +854,11 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "album_view"):
             return
         width = width if width is not None else self.album_view.viewport().width()
-        _, cover = album_cover_layout(width)
+        columns, cover = album_cover_layout(width)
+        if (columns, cover) == (self._album_columns, self._album_cover_size):
+            return
+        self._album_columns = columns
+        self._album_cover_size = cover
         self.album_model.set_cover_size(cover)
         self.album_delegate.set_cover_size(cover)
         self.album_view.setIconSize(QSize(cover, cover))
@@ -874,7 +910,6 @@ class MainWindow(QMainWindow):
         self.refresh_tracks()
         if return_id:
             self.tabs.setCurrentIndex(1)
-            self.refresh_albums()
             for row in range(self.album_model.rowCount()):
                 album = self.album_model.album_at(row)
                 if album is not None and album.id == return_id:
@@ -896,9 +931,6 @@ class MainWindow(QMainWindow):
         if visible:
             self.album_filter_label.setText(f"Album: {self._album_filter_title}")
 
-    def _track_has_artwork(self, track: Track) -> bool:
-        return track.has_artwork
-
     # ------------------------------------------------------------------
     # Selection and inline editor
 
@@ -908,9 +940,11 @@ class MainWindow(QMainWindow):
             if selection is None:
                 return []
             album_ids: list[str] = []
+            seen: set[str] = set()
             for index in selection.selectedIndexes():
                 album = self.album_model.album_at(index.row())
-                if album is not None and album.id not in album_ids:
+                if album is not None and album.id not in seen:
+                    seen.add(album.id)
                     album_ids.append(album.id)
             return self.db.track_ids_for_albums(album_ids, self._current_library_id)
         selection = self.table.selectionModel()
@@ -965,8 +999,10 @@ class MainWindow(QMainWindow):
             self.show_in_finder(track)
 
     def go_to_album(self, track: Track) -> None:
-        self.tabs.setCurrentIndex(1)
-        self.refresh_albums()
+        if self.tabs.currentIndex() == 1:
+            self.refresh_albums()
+        else:
+            self.tabs.setCurrentIndex(1)
         for row in range(self.album_model.rowCount()):
             album = self.album_model.album_at(row)
             if album is not None and album.id == track.album_id:
@@ -1033,17 +1069,47 @@ class MainWindow(QMainWindow):
         if not track.has_artwork:
             return None
         try:
+            stat = Path(track.path).stat()
+        except OSError:
+            return None
+        cache_key = track.path
+        cached = self._artwork_cache.get(cache_key)
+        if (
+            cached is not None
+            and cached[0] == stat.st_mtime
+            and cached[1] == stat.st_size
+            and cached[2] == track.artwork_checksum
+        ):
+            self._artwork_cache.move_to_end(cache_key)
+            return cached[3]
+        try:
             artworks = read_artwork(track.path)
         except Exception:
             return None
         if not artworks:
             return None
         artwork = next((item for item in artworks if item.kind == "front"), artworks[0])
-        return (
+        value = (
             artwork.data,
             f"{artwork.width}x{artwork.height} · {artwork.mime}",
             len(artworks),
         )
+        if len(artwork.data) <= self._artwork_cache_limit:
+            previous = self._artwork_cache.pop(cache_key, None)
+            if previous is not None:
+                self._artwork_cache_bytes -= len(previous[3][0])
+            self._artwork_cache[cache_key] = (
+                stat.st_mtime,
+                stat.st_size,
+                track.artwork_checksum,
+                value,
+            )
+            self._artwork_cache_bytes += len(artwork.data)
+            self._artwork_cache.move_to_end(cache_key)
+            while self._artwork_cache_bytes > self._artwork_cache_limit and self._artwork_cache:
+                _, removed = self._artwork_cache.popitem(last=False)
+                self._artwork_cache_bytes -= len(removed[3][0])
+        return value
 
     def _artwork_for_track(self, track: Track) -> tuple[QPixmap, str]:
         artwork = self._front_artwork(track)
@@ -1109,7 +1175,6 @@ class MainWindow(QMainWindow):
         result = self.service.update_tags(ids, edits) if tag_changes else None
         song_id = result.updated[0].id if result is not None and result.updated else ids[0]
         self.refresh_libraries()
-        self.refresh_tracks()
         if self.tabs.currentIndex() == 0:
             self._select_song(song_id)
         else:
@@ -1136,7 +1201,6 @@ class MainWindow(QMainWindow):
         result = self.service.update_tags(ids, edits)
         first = result.updated[0].id if result.updated else ids[0]
         self.refresh_libraries()
-        self.refresh_tracks()
         self._select_song(first)
         if result.errors:
             QMessageBox.warning(self, "Tag update warnings", "\n".join(result.errors[:10]))
@@ -1160,7 +1224,6 @@ class MainWindow(QMainWindow):
         result = self.service.auto_number_tracks(ids, per_disc=per_disc, start=start)
         first = result.updated[0].id if result.updated else ids[0]
         self.refresh_libraries()
-        self.refresh_tracks()
         self._select_song(first)
         if result.errors:
             QMessageBox.warning(self, "Auto-number warnings", "\n".join(result.errors[:10]))
@@ -1200,7 +1263,6 @@ class MainWindow(QMainWindow):
         dialog = OrganizeDialog(self.service, ids, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.refresh_libraries()
-            self.refresh_tracks()
 
     def delete_tracks(self) -> None:
         ids = self._require_selection()
@@ -1211,7 +1273,6 @@ class MainWindow(QMainWindow):
             return
         result = self.service.delete_tracks(ids, delete_files=dialog.delete_files())
         self.refresh_libraries()
-        self.refresh_tracks()
         if result.errors:
             QMessageBox.warning(self, "Delete warnings", "\n".join(result.errors[:10]))
 
@@ -1222,19 +1283,17 @@ class MainWindow(QMainWindow):
         library = self._require_library()
         if library is None:
             return
-        QApplication.processEvents()
-        tracks = self.db.list_tracks(library_id=library.id)
-        for index, track in enumerate(tracks, start=1):
-            if self.db.get_content_hash(track.id):
-                continue
-            try:
-                self.db.update_content_hash(track.id, content_hash(track.path))
-            except OSError:
-                continue
-            if index % 25 == 0:
+
+        def report(phase: str, current: int, total: int, _message: str) -> None:
+            if current % 25 == 0 or current == total:
+                self.status_summary.setText(f"{phase} {current}/{total}")
                 QApplication.processEvents()
-        exact = self.service.exact_duplicates()
-        probable = self.db.probable_duplicate_groups()
+
+        QApplication.processEvents()
+        self.service.index_content_hashes(library.id, progress=report)
+        exact = self.service.exact_duplicates(library.id)
+        probable = self.db.probable_duplicate_groups(library.id)
+        self._update_status()
         if not exact and not probable:
             QMessageBox.information(self, "Duplicates", "No duplicate groups were found.")
             return
@@ -1242,7 +1301,6 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_ids:
             result = self.service.delete_tracks(dialog.selected_ids)
             self.refresh_libraries()
-            self.refresh_tracks()
             if result.errors:
                 QMessageBox.warning(self, "Duplicate removal", "\n".join(result.errors[:10]))
 
@@ -1475,11 +1533,13 @@ class MainWindow(QMainWindow):
 
     def _column_layout_changed(self, *_args: object) -> None:
         if self._columns_ready and not self._loading_columns:
-            self._save_column_config()
+            self._column_save_timer.start()
 
     def _save_column_config(self) -> None:
         if not self._columns_ready or not hasattr(self, "table"):
             return
+        if hasattr(self, "_column_save_timer"):
+            self._column_save_timer.stop()
         header = self.table.horizontalHeader()
         keys = [key for _, key in COLUMNS]
         visible = [key for index, key in enumerate(keys) if not self.table.isColumnHidden(index)]

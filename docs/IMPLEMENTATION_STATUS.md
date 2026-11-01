@@ -26,6 +26,7 @@
 - Metadata round-trips cover FLAC, MP3, M4A, OGG, Opus, WAV, AIFF, and WavPack.
 - Bitrates are stored and displayed in Kbps; schema v2 migrates pre-existing values.
 - Schema v3 stores track and disc values as text and migrates existing libraries.
+  Schema v4 rebuilds the FTS index with stable rowids and adds album/format indexes.
 - The interface uses Qt Fusion styling, a menu-less action bar, and Settings-hosted
   library and database management. The Settings → Library tab no longer contains
   selection-specific actions.
@@ -73,7 +74,7 @@
 Test status at the time of writing:
 
 ```text
-104 passed, 2 skipped (default suite)
+127 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 

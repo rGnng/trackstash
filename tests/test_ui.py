@@ -385,6 +385,40 @@ def test_album_grid_fills_viewport_with_fixed_gaps(
     assert window.album_view.iconSize().width() == 207
 
 
+def test_album_grid_reflows_after_resize_while_hidden(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from trackstash.core.db import AlbumRow
+    from trackstash.ui.main_window import album_cover_layout
+
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.album_model.set_albums(
+        [
+            AlbumRow(f"album-{index}", f"Album {index}", "Artist", "2024", 1, None, "")
+            for index in range(20)
+        ]
+    )
+    window._update_album_grid()
+    window.tabs.setCurrentIndex(0)
+    window.resize(1540, 900)
+    qtbot.wait(100)
+    window.tabs.setCurrentIndex(1)
+    qtbot.wait(100)
+
+    viewport = window.album_view.viewport().width()
+    columns, cover = album_cover_layout(viewport)
+    assert window.album_view.iconSize().width() == cover
+    rects = [
+        window.album_view.visualRect(window.album_model.index(index, 0)) for index in range(10)
+    ]
+    first_row = [rect for rect in rects if rect.y() == rects[0].y()]
+    assert len(first_row) == columns
+
+
 def test_album_grid_cover_size_does_not_depend_on_album_count(
     qtbot: QtBot, tmp_path: Path, audio_factory: Path
 ) -> None:
@@ -409,28 +443,7 @@ def test_album_grid_cover_size_does_not_depend_on_album_count(
     assert few == many == 252
 
 
-def test_album_selection_color_is_flat_with_gradient_palette(qtbot: QtBot, tmp_path: Path) -> None:
-    from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPalette
-
-    from trackstash.ui.main_window import AlbumItemDelegate, _solid_palette_color
-
-    database = Database(tmp_path / "album-selection.sqlite")
-    window = MainWindow(database)
-    qtbot.addWidget(window)
-    assert isinstance(window.album_view.itemDelegate(), AlbumItemDelegate)
-
-    palette = QPalette()
-    gradient = QLinearGradient(0, 0, 0, 1)
-    gradient.setColorAt(0, QColor("#71a0c8"))
-    gradient.setColorAt(1, QColor("#3a5f88"))
-    palette.setBrush(QPalette.ColorRole.Highlight, QBrush(gradient))
-
-    color = _solid_palette_color(palette, QPalette.ColorRole.Highlight, "#000000")
-    assert color.isValid()
-    assert color.name() == "#557fa8"
-
-
-def test_album_selection_matches_view_switch_highlight(qtbot: QtBot, tmp_path: Path) -> None:
+def test_album_selection_uses_the_palette_highlight(qtbot: QtBot, tmp_path: Path) -> None:
     from PySide6.QtCore import QRect, QSize, Qt
     from PySide6.QtGui import (
         QColor,
@@ -449,13 +462,12 @@ def test_album_selection_matches_view_switch_highlight(qtbot: QtBot, tmp_path: P
     database = Database(tmp_path / "album-highlight.sqlite")
     window = MainWindow(database)
     qtbot.addWidget(window)
+    assert isinstance(window.album_view.itemDelegate(), AlbumItemDelegate)
     view = window.album_view
     view_palette = view.palette()
     view_palette.setColor(QPalette.ColorRole.Highlight, QColor("#0640c6"))
+    view_palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
     view.setPalette(view_palette)
-    viewport_palette = view.viewport().palette()
-    viewport_palette.setColor(QPalette.ColorRole.Highlight, QColor("#314f78"))
-    view.viewport().setPalette(viewport_palette)
 
     model = QStandardItemModel()
     item = QStandardItem("Album\nArtist")
@@ -472,7 +484,7 @@ def test_album_selection_matches_view_switch_highlight(qtbot: QtBot, tmp_path: P
     painter = QPainter(image)
     option = QStyleOptionViewItem()
     option.rect = QRect(0, 0, 106, 140)
-    option.state = QStyle.StateFlag.State_Selected
+    option.state = QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_Enabled
     option.palette = view.palette()
     option.widget = view
     option.font = view.font()
@@ -480,7 +492,7 @@ def test_album_selection_matches_view_switch_highlight(qtbot: QtBot, tmp_path: P
     delegate.paint(painter, option, model.index(0, 0))
     painter.end()
 
-    assert image.pixelColor(1, 1).name() == "#314f78"
+    assert image.pixelColor(1, 1).name() == "#0640c6"
 
 
 def test_album_context_menu_keeps_only_edit_and_delete(
@@ -1177,3 +1189,120 @@ def test_track_and_disc_accept_text(qtbot: QtBot, tmp_path: Path, audio_factory:
     editor._field_changed("track")
     assert editor.save_button.isEnabled() is True
     assert editor.pending_edits()["track"] == "A1"
+
+
+def test_inline_save_refreshes_tracks_once(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path, monkeypatch
+) -> None:
+    from PySide6.QtWidgets import QDialog, QMessageBox
+
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.tracks_view_button.click()
+    window.table.selectRow(0)
+
+    monkeypatch.setattr(
+        "trackstash.ui.main_window.TagPreviewDialog.exec",
+        lambda self: QDialog.DialogCode.Accepted,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+
+    calls: list[int] = []
+    original = window.refresh_tracks
+
+    def counted() -> None:
+        calls.append(1)
+        original()
+
+    monkeypatch.setattr(window, "refresh_tracks", counted)
+    window.save_inline_edits({"title": "Refresh Once"})
+    assert len(calls) == 1
+
+
+def test_column_resize_is_saved_once_after_debounce(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path, monkeypatch
+) -> None:
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window._column_save_timer.stop()
+    calls: list[str] = []
+    original = database.set_setting
+
+    def counted(key: str, value: str) -> None:
+        if key == "track_columns":
+            calls.append(value)
+        original(key, value)
+
+    monkeypatch.setattr(database, "set_setting", counted)
+    header = window.table.horizontalHeader()
+    for width in (200, 210, 220):
+        header.resizeSection(0, width)
+    assert calls == []
+    qtbot.wait(350)
+    assert len(calls) == 1
+
+
+def test_selection_color_is_unified_across_views(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from PySide6.QtCore import QItemSelectionModel
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QApplication
+
+    from trackstash.app import configure_application
+    from trackstash.ui.theme import SELECTION_HIGHLIGHT
+
+    app = QApplication.instance()
+    assert isinstance(app, QApplication)
+    previous_style = app.style().objectName()
+    previous_palette = app.palette()
+    try:
+        configure_application(app)
+        expected = QColor(SELECTION_HIGHLIGHT).name()
+        database, _library = _library_with_tracks(tmp_path, audio_factory)
+        window = MainWindow(database)
+        qtbot.addWidget(window)
+        window.show()
+        window.refresh_libraries()
+        assert window.table.palette().color(
+            QPalette.ColorRole.AlternateBase
+        ) == app.palette().color(QPalette.ColorRole.AlternateBase)
+        window.tabs.setCurrentIndex(1)
+        window.refresh_albums()
+        qtbot.wait(20)
+        album_index = window.album_model.index(0, 0)
+        window.album_view.setCurrentIndex(album_index)
+        window.album_view.selectionModel().select(
+            album_index,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect,
+        )
+        album_rect = window.album_view.visualRect(album_index)
+        album_image = window.album_view.viewport().grab().toImage()
+        album_color = album_image.pixelColor(album_rect.x() + 5, album_rect.y() + 5)
+
+        button_image = window.albums_view_button.grab().toImage()
+        button_color = button_image.pixelColor(
+            window.albums_view_button.width() // 2,
+            window.albums_view_button.height() // 2,
+        )
+
+        window.tabs.setCurrentIndex(0)
+        window.table.selectRow(0)
+        qtbot.wait(20)
+        table_rect = window.table.visualRect(window.model.index(0, 0))
+        table_image = window.table.viewport().grab().toImage()
+        table_color = table_image.pixelColor(table_rect.x() + 5, table_rect.y() + 5)
+
+        assert album_color.name() == expected
+        assert button_color.name() == expected
+        assert table_color.name() == expected
+    finally:
+        app.setStyle(previous_style)
+        app.setPalette(previous_palette)

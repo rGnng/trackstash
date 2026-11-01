@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import time
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,13 +21,12 @@ from trackstash.core.identity import (
     is_under,
     library_uuid,
     normalize_identifier,
-    relative_path,
     song_uuid,
     stable_uuid,
 )
 from trackstash.core.metadata import TagSet, TrackMetadata
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS libraries (
@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS songs (
 CREATE INDEX IF NOT EXISTS idx_songs_album ON songs(album_id);
 CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist_id);
 CREATE INDEX IF NOT EXISTS idx_songs_library ON songs(library_id);
+CREATE INDEX IF NOT EXISTS idx_songs_album_library ON songs(album_id, library_id);
 
 CREATE TABLE IF NOT EXISTS ts_song_tags (
     song_id TEXT PRIMARY KEY REFERENCES songs(id) ON DELETE CASCADE,
@@ -132,6 +133,8 @@ CREATE TABLE IF NOT EXISTS ts_audio_properties (
     bit_depth INTEGER NOT NULL DEFAULT 0,
     lossless INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_ts_audio_properties_format
+    ON ts_audio_properties(format COLLATE NOCASE);
 
 CREATE TABLE IF NOT EXISTS ts_file_state (
     song_id TEXT PRIMARY KEY REFERENCES songs(id) ON DELETE CASCADE,
@@ -254,6 +257,28 @@ _TAG_SET_FIELDS = (
     "replaygain_album_gain",
     "replaygain_album_peak",
 )
+
+
+def _fts_match_query(text: str) -> str:
+    """Turn user input into a safe FTS5 prefix query.
+
+    FTS5 reserves punctuation such as quotes, asterisks, and parentheses, so
+    only word characters are used. Every token becomes a prefix query and the
+    tokens are combined with an implicit AND.
+    """
+    tokens = re.findall(r"\w+", text, re.UNICODE)
+    return " ".join(f'"{token}"*' for token in tokens)
+
+
+def _fts_rowid(song_id: str) -> int:
+    """Return a stable 63-bit rowid for a song ID.
+
+    FTS5 does not index the ``song_id`` column, so deleting by song ID would
+    scan the whole index. A deterministic rowid keeps per-track updates O(log n)
+    while remaining stable across process restarts.
+    """
+    digest = hashlib.blake2b(song_id.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") & ((1 << 63) - 1)
 
 
 def _tagset_from_row(row: sqlite3.Row, values: Sequence[sqlite3.Row]) -> TagSet:
@@ -434,7 +459,6 @@ class Database:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=30000")
-        connection.execute("PRAGMA journal_mode=WAL")
         try:
             yield connection
         finally:
@@ -466,9 +490,45 @@ class Database:
             connection.commit()
             if 0 < current < 3:
                 self._migrate_songs_to_text(connection)
+            if current < 4:
+                self._rebuild_fts(connection)
             if current < SCHEMA_VERSION:
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             connection.commit()
+
+    @staticmethod
+    def _rebuild_fts(connection: sqlite3.Connection) -> None:
+        """Rebuild the FTS index so older databases can use native search."""
+        connection.execute("DELETE FROM ts_track_fts")
+        cursor = connection.execute(
+            "SELECT s.id, s.title, ar.name AS artist,"
+            " COALESCE(NULLIF(t.album_artist, ''), ar.name) AS album_artist,"
+            " al.title AS album, s.genre, s.comments, s.path"
+            " FROM songs s"
+            " JOIN artists ar ON ar.id = s.artist_id"
+            " JOIN albums al ON al.id = s.album_id"
+            " LEFT JOIN ts_song_tags t ON t.song_id = s.id"
+        )
+        while rows := cursor.fetchmany(1000):
+            connection.executemany(
+                "INSERT INTO ts_track_fts("
+                "rowid, song_id, title, artist, album_artist, album, genre, comment, path"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        _fts_rowid(str(row["id"])),
+                        row["id"],
+                        row["title"],
+                        row["artist"],
+                        row["album_artist"],
+                        row["album"],
+                        row["genre"],
+                        row["comments"],
+                        row["path"],
+                    )
+                    for row in rows
+                ],
+            )
 
     def _migrate_songs_to_text(self, connection: sqlite3.Connection) -> None:
         """Rebuild songs so track/disc columns use TEXT affinity."""
@@ -532,6 +592,9 @@ class Database:
             connection.execute("CREATE INDEX IF NOT EXISTS idx_songs_album ON songs(album_id)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist_id)")
             connection.execute("CREATE INDEX IF NOT EXISTS idx_songs_library ON songs(library_id)")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_songs_album_library ON songs(album_id, library_id)"
+            )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -718,15 +781,25 @@ class Database:
     # ------------------------------------------------------------------
     # Tracks and metadata
 
-    def _ensure_artist(self, connection: sqlite3.Connection, name: str) -> str:
+    def _ensure_artist(
+        self,
+        connection: sqlite3.Connection,
+        name: str,
+        cache: dict[str, str] | None = None,
+    ) -> str:
         clean_name = name.strip() or "Unknown Artist"
+        if cache is not None and clean_name in cache:
+            return cache[clean_name]
         fallback = artist_uuid(clean_name)
         connection.execute(
             "INSERT OR IGNORE INTO artists(id, name) VALUES(?, ?)",
             (fallback, clean_name),
         )
         row = connection.execute("SELECT id FROM artists WHERE name = ?", (clean_name,)).fetchone()
-        return str(row["id"]) if row else fallback
+        artist_id = str(row["id"]) if row else fallback
+        if cache is not None:
+            cache[clean_name] = artist_id
+        return artist_id
 
     def _ensure_album(
         self,
@@ -735,8 +808,12 @@ class Database:
         artist_id: str,
         genre: str,
         year: str,
+        cache: dict[tuple[str, str], str] | None = None,
     ) -> str:
         clean_title = title.strip() or "Unknown Album"
+        cache_key = (artist_id, clean_title)
+        if cache is not None and cache_key in cache:
+            return cache[cache_key]
         fallback = album_uuid(artist_id, clean_title)
         connection.execute(
             "INSERT INTO albums(id, title, artist_id, genre, year, artwork)"
@@ -748,20 +825,31 @@ class Database:
             "SELECT id FROM albums WHERE title = ? AND artist_id = ?",
             (clean_title, artist_id),
         ).fetchone()
-        return str(row["id"]) if row else fallback
+        album_id = str(row["id"]) if row else fallback
+        if cache is not None:
+            cache[cache_key] = album_id
+        return album_id
 
     def _track_values(
-        self, metadata: TrackMetadata, library: Library
+        self,
+        metadata: TrackMetadata,
+        library: Library,
+        path_value: str,
+        library_root: str,
     ) -> tuple[str, str, str, str, str]:
         tags = metadata.tags
         artist_name = tags.primary_artist
         album_artist_name = tags.album_artist_or_primary
         album_title = tags.album.strip() or "Unknown Album"
-        rel = relative_path(metadata.path, library.path)
+        if path_value == library_root:
+            rel: str | None = ""
+        elif is_under(path_value, library_root):
+            root = library_root.rstrip("/")
+            rel = path_value[len(root) :].lstrip("/") if root else path_value.lstrip("/")
+        else:
+            rel = None
         song_id = (
-            song_uuid(library.id_namespace, rel)
-            if rel is not None
-            else stable_uuid(canonical_path(metadata.path))
+            song_uuid(library.id_namespace, rel) if rel is not None else stable_uuid(path_value)
         )
         return song_id, artist_name, album_artist_name, album_title, tags.primary_genre
 
@@ -773,18 +861,26 @@ class Database:
             return []
         now = _now()
         written_ids: list[str] = []
+        artist_cache: dict[str, str] = {}
+        album_cache: dict[tuple[str, str], str] = {}
+        library_root = canonical_path(library.path)
         with self.transaction() as connection:
             for metadata in metadata_list:
                 tags = metadata.tags
-                song_id, artist_name, album_artist_name, album_title, genre = self._track_values(
-                    metadata, library
-                )
-                artist_id = self._ensure_artist(connection, artist_name)
-                album_artist_id = self._ensure_artist(connection, album_artist_name)
-                album_id = self._ensure_album(
-                    connection, album_title, album_artist_id, genre, tags.year
-                )
                 path_value = canonical_path(metadata.path)
+                song_id, artist_name, album_artist_name, album_title, genre = self._track_values(
+                    metadata, library, path_value, library_root
+                )
+                artist_id = self._ensure_artist(connection, artist_name, artist_cache)
+                album_artist_id = self._ensure_artist(connection, album_artist_name, artist_cache)
+                album_id = self._ensure_album(
+                    connection,
+                    album_title,
+                    album_artist_id,
+                    genre,
+                    tags.year,
+                    album_cache,
+                )
                 existing = connection.execute(
                     "SELECT id, date_added FROM songs WHERE path = ?", (path_value,)
                 ).fetchone()
@@ -794,7 +890,7 @@ class Database:
                     date_added = float(existing["date_added"])
                     old_id = str(existing["id"])
                     if old_id != song_id:
-                        self._remap_song_id(connection, old_id, song_id, path_value)
+                        song_id = self._remap_song_id(connection, old_id, song_id, path_value)
 
                 connection.execute(
                     "INSERT INTO songs"
@@ -853,9 +949,6 @@ class Database:
                     path_value,
                 )
                 written_ids.append(song_id)
-            connection.execute(
-                "UPDATE libraries SET date_added = date_added WHERE id = ?", (library.id,)
-            )
         return self.get_tracks_by_ids(written_ids)
 
     def _upsert_song_tags(self, connection: sqlite3.Connection, song_id: str, tags: TagSet) -> None:
@@ -1008,12 +1101,23 @@ class Database:
         comment: str,
         path: str,
     ) -> None:
-        connection.execute("DELETE FROM ts_track_fts WHERE song_id = ?", (song_id,))
+        rowid = _fts_rowid(song_id)
+        connection.execute("DELETE FROM ts_track_fts WHERE rowid = ?", (rowid,))
         connection.execute(
             "INSERT INTO ts_track_fts("
-            "song_id, title, artist, album_artist, album, genre, comment, path"
-            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-            (song_id, title, artist, album_artist, album, genre, comment, path),
+            "rowid, song_id, title, artist, album_artist, album, genre, comment, path"
+            ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                rowid,
+                song_id,
+                title,
+                artist,
+                album_artist,
+                album,
+                genre,
+                comment,
+                path,
+            ),
         )
 
     def _remap_song_id(
@@ -1022,16 +1126,28 @@ class Database:
         old_id: str,
         new_id: str,
         new_path: str,
-    ) -> None:
+    ) -> str:
+        """Move a song row and its child rows to ``new_id`` and return the ID.
+
+        If another row already owns ``new_id``, keep that identity and drop the
+        stale path row instead of leaving the caller with a primary-key conflict.
+        """
         if old_id == new_id:
-            return
+            return new_id
         existing = connection.execute("SELECT id FROM songs WHERE id = ?", (new_id,)).fetchone()
         if existing is not None and str(existing["id"]) != old_id:
             # The new identity already belongs to another row; keep the existing
-            # identity and remove the stale row. This is a defensive fallback for
-            # duplicate paths produced by external tools.
+            # identity, point it at this path, and remove the stale row. This is a
+            # defensive fallback for duplicate paths produced by external tools.
             connection.execute("DELETE FROM songs WHERE id = ?", (old_id,))
-            return
+            connection.execute("UPDATE songs SET path = ? WHERE id = ?", (new_path, new_id))
+            connection.execute(
+                "UPDATE ts_operation_items SET song_id = ? WHERE song_id = ?",
+                (new_id, old_id),
+            )
+            connection.execute("DELETE FROM ts_track_fts WHERE rowid = ?", (_fts_rowid(old_id),))
+            return new_id
+        connection.execute("PRAGMA defer_foreign_keys=ON")
         connection.execute(
             "UPDATE songs SET id = ?, path = ? WHERE id = ?", (new_id, new_path, old_id)
         )
@@ -1049,7 +1165,8 @@ class Database:
             "UPDATE ts_operation_items SET song_id = ? WHERE song_id = ?",
             (new_id, old_id),
         )
-        connection.execute("DELETE FROM ts_track_fts WHERE song_id = ?", (old_id,))
+        connection.execute("DELETE FROM ts_track_fts WHERE rowid = ?", (_fts_rowid(old_id),))
+        return new_id
 
     # ------------------------------------------------------------------
     # Track queries
@@ -1083,6 +1200,8 @@ class Database:
         library_id: str | None = None,
         album_id: str | None = None,
         query: str = "",
+        format_filter: str | None = None,
+        missing_artwork: bool = False,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[Track]:
@@ -1094,15 +1213,28 @@ class Database:
         if album_id:
             clauses.append("s.album_id = ?")
             parameters.append(album_id)
+        if format_filter:
+            clauses.append("p.format = ? COLLATE NOCASE")
+            parameters.append(format_filter.strip())
+        if missing_artwork:
+            clauses.append("a.id IS NULL")
         words = query.strip()
         if words:
-            clauses.append(
-                "(s.title LIKE ? OR ar.name LIKE ? OR al.title LIKE ?"
-                " OR s.genre LIKE ? OR s.comments LIKE ? OR s.path LIKE ?"
-                " OR t.album_artist LIKE ?)"
-            )
-            pattern = f"%{words}%"
-            parameters.extend([pattern] * 7)
+            match_query = _fts_match_query(words)
+            if match_query:
+                clauses.append(
+                    "s.id IN (SELECT song_id FROM ts_track_fts WHERE ts_track_fts MATCH ?)"
+                )
+                parameters.append(match_query)
+            else:
+                # A query made only of punctuation has no FTS tokens.
+                pattern = f"%{words}%"
+                clauses.append(
+                    "(s.title LIKE ? OR ar.name LIKE ? OR al.title LIKE ?"
+                    " OR s.genre LIKE ? OR s.comments LIKE ? OR s.path LIKE ?"
+                    " OR t.album_artist LIKE ?)"
+                )
+                parameters.extend([pattern] * 7)
         sql = self._TRACK_SELECT
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
@@ -1126,7 +1258,11 @@ class Database:
         if library_id:
             sql += " AND library_id = ?"
             parameters.append(library_id)
-        sql += " ORDER BY disc, track, title COLLATE NOCASE"
+        sql += (
+            " ORDER BY CAST(disc AS INTEGER), disc COLLATE NOCASE,"
+            " CAST(track AS INTEGER), track COLLATE NOCASE,"
+            " title COLLATE NOCASE"
+        )
         with self.connect() as connection:
             rows = connection.execute(sql, parameters).fetchall()
         return [str(row["id"]) for row in rows]
@@ -1170,23 +1306,22 @@ class Database:
         descending: bool = True,
     ) -> list[AlbumRow]:
         """Return album summaries for the grid view, optionally filtered."""
-        clauses = ["s.library_id = ?"]
-        parameters: list[Any] = [library_id]
+        clauses = ["s.library_id = :library_id"]
+        parameters: dict[str, Any] = {"library_id": library_id}
         if query.strip():
-            pattern = f"%{query.strip()}%"
-            clauses.append("(al.title LIKE ? OR ar.name LIKE ?)")
-            parameters.extend([pattern, pattern])
+            clauses.append("(al.title LIKE :pattern OR ar.name LIKE :pattern)")
+            parameters["pattern"] = f"%{query.strip()}%"
         sql = (
             "SELECT al.id, al.title, ar.name AS artist, al.year,"
             " COUNT(s.id) AS track_count,"
             " (SELECT s2.path FROM ts_artwork a"
             "  JOIN songs s2 ON s2.id = a.song_id"
-            "  WHERE s2.album_id = al.id"
+            "  WHERE s2.album_id = al.id AND s2.library_id = :library_id"
             "  ORDER BY CASE WHEN a.kind = 'front' THEN 0 ELSE 1 END, a.id"
             "  LIMIT 1) AS artwork_song_path,"
             " (SELECT a.checksum FROM ts_artwork a"
             "  JOIN songs s2 ON s2.id = a.song_id"
-            "  WHERE s2.album_id = al.id"
+            "  WHERE s2.album_id = al.id AND s2.library_id = :library_id"
             "  ORDER BY CASE WHEN a.kind = 'front' THEN 0 ELSE 1 END, a.id"
             "  LIMIT 1) AS artwork_checksum"
             " FROM albums al"
@@ -1362,15 +1497,25 @@ class Database:
             for row in rows
         }
 
+    @staticmethod
+    def _delete_fts_rows(connection: sqlite3.Connection, song_ids: Sequence[str]) -> None:
+        for start in range(0, len(song_ids), 500):
+            chunk = list(song_ids[start : start + 500])
+            marks = ",".join("?" for _ in chunk)
+            connection.execute(
+                f"DELETE FROM ts_track_fts WHERE rowid IN ({marks})",
+                [_fts_rowid(song_id) for song_id in chunk],
+            )
+
     def delete_tracks(self, song_ids: Sequence[str]) -> int:
         if not song_ids:
             return 0
         with self.transaction() as connection:
             removed = 0
+            self._delete_fts_rows(connection, song_ids)
             for start in range(0, len(song_ids), 300):
                 chunk = list(song_ids[start : start + 300])
                 marks = ",".join("?" for _ in chunk)
-                connection.execute(f"DELETE FROM ts_track_fts WHERE song_id IN ({marks})", chunk)
                 cursor = connection.execute(f"DELETE FROM songs WHERE id IN ({marks})", chunk)
                 removed += cursor.rowcount
             self._cleanup_orphans(connection)
@@ -1378,11 +1523,13 @@ class Database:
 
     def delete_library_rows(self, library_id: str) -> int:
         with self.transaction() as connection:
-            connection.execute(
-                "DELETE FROM ts_track_fts WHERE song_id IN"
-                " (SELECT id FROM songs WHERE library_id = ?)",
-                (library_id,),
-            )
+            song_ids = [
+                str(row["id"])
+                for row in connection.execute(
+                    "SELECT id FROM songs WHERE library_id = ?", (library_id,)
+                )
+            ]
+            self._delete_fts_rows(connection, song_ids)
             cursor = connection.execute("DELETE FROM songs WHERE library_id = ?", (library_id,))
             removed = cursor.rowcount
             connection.execute("DELETE FROM libraries WHERE id = ?", (library_id,))
@@ -1430,7 +1577,7 @@ class Database:
                 "UPDATE ts_operation_items SET song_id = ? WHERE song_id = ?",
                 (new_id, song_id),
             )
-            connection.execute("DELETE FROM ts_track_fts WHERE song_id = ?", (song_id,))
+            connection.execute("DELETE FROM ts_track_fts WHERE rowid = ?", (_fts_rowid(song_id),))
             self._update_fts(
                 connection,
                 new_id,
@@ -1447,16 +1594,23 @@ class Database:
             raise RuntimeError("Track disappeared after move")
         return track
 
-    def find_by_content_hash(self, content_hash: str) -> Track | None:
+    def find_by_content_hash(
+        self, content_hash: str, library_id: str | None = None
+    ) -> Track | None:
         if not content_hash:
             return None
+        sql = (
+            self._TRACK_SELECT
+            + " JOIN ts_file_state f ON f.song_id = s.id"
+            + " WHERE f.content_hash = ?"
+        )
+        parameters: list[Any] = [content_hash]
+        if library_id:
+            sql += " AND s.library_id = ?"
+            parameters.append(library_id)
+        sql += " LIMIT 1"
         with self.connect() as connection:
-            row = connection.execute(
-                self._TRACK_SELECT
-                + " JOIN ts_file_state f ON f.song_id = s.id"
-                + " WHERE f.content_hash = ? LIMIT 1",
-                (content_hash,),
-            ).fetchone()
+            row = connection.execute(sql, parameters).fetchone()
         return _row_to_track(row) if row else None
 
     def latest_undoable_operation(self) -> Operation | None:
@@ -1616,13 +1770,18 @@ class Database:
                 (key, value),
             )
 
-    def exact_duplicate_groups(self) -> list[list[Track]]:
+    def exact_duplicate_groups(self, library_id: str | None = None) -> list[list[Track]]:
+        sql = (
+            "SELECT s.id, f.content_hash, s.file_size FROM songs s"
+            " JOIN ts_file_state f ON f.song_id = s.id"
+            " WHERE f.content_hash IS NOT NULL AND f.content_hash != ''"
+        )
+        parameters: list[Any] = []
+        if library_id:
+            sql += " AND s.library_id = ?"
+            parameters.append(library_id)
         with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT s.id, f.content_hash, s.file_size FROM songs s"
-                " JOIN ts_file_state f ON f.song_id = s.id"
-                " WHERE f.content_hash IS NOT NULL AND f.content_hash != ''"
-            ).fetchall()
+            rows = connection.execute(sql, parameters).fetchall()
         groups: dict[str, list[str]] = {}
         for row in rows:
             groups.setdefault(row["content_hash"], []).append(row["id"])
@@ -1632,27 +1791,51 @@ class Database:
                 result.append(self.get_tracks_by_ids(ids))
         return result
 
-    def probable_duplicate_groups(self) -> list[list[Track]]:
+    def probable_duplicate_groups(self, library_id: str | None = None) -> list[list[Track]]:
+        sql = (
+            "SELECT s.id, lower(ar.name) AS artist, lower(s.title) AS title,"
+            " round(s.duration) AS duration FROM songs s"
+            " JOIN artists ar ON ar.id = s.artist_id"
+        )
+        parameters: list[Any] = []
+        if library_id:
+            sql += " WHERE s.library_id = ?"
+            parameters.append(library_id)
         with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT s.id, lower(ar.name) AS artist, lower(s.title) AS title,"
-                " round(s.duration) AS duration FROM songs s"
-                " JOIN artists ar ON ar.id = s.artist_id"
-            ).fetchall()
+            rows = connection.execute(sql, parameters).fetchall()
         groups: dict[tuple[str, str, int], list[str]] = {}
         for row in rows:
             key = (row["artist"], row["title"], int(row["duration"] or 0))
             groups.setdefault(key, []).append(row["id"])
         return [self.get_tracks_by_ids(ids) for ids in groups.values() if len(ids) > 1]
 
+    def track_ids_missing_content_hash(self, library_id: str) -> list[str]:
+        """Return tracks in a library whose content fingerprint is not cached."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT s.id FROM songs s"
+                " LEFT JOIN ts_file_state f ON f.song_id = s.id"
+                " WHERE s.library_id = ?"
+                " AND (f.content_hash IS NULL OR f.content_hash = '')"
+                " ORDER BY s.path",
+                (library_id,),
+            ).fetchall()
+        return [str(row["id"]) for row in rows]
+
     def update_content_hash(self, song_id: str, content_hash: str) -> None:
+        self.update_content_hashes({song_id: content_hash})
+
+    def update_content_hashes(self, values: Mapping[str, str]) -> None:
+        """Store several content fingerprints in one transaction."""
+        if not values:
+            return
         with self.transaction() as connection:
-            connection.execute(
+            connection.executemany(
                 "INSERT INTO ts_file_state(song_id, content_hash, hash_state)"
                 " VALUES(?, ?, 'complete')"
                 " ON CONFLICT(song_id) DO UPDATE SET content_hash = excluded.content_hash,"
                 " hash_state = 'complete'",
-                (song_id, content_hash),
+                [(song_id, digest) for song_id, digest in values.items()],
             )
 
     def get_content_hash(self, song_id: str) -> str:

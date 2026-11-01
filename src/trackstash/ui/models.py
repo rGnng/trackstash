@@ -40,6 +40,8 @@ COLUMNS: tuple[tuple[str, str], ...] = (
     ("Path", "path"),
 )
 
+ALBUM_ICON_CACHE_SIZE = 64
+
 
 def _duration_text(seconds: float) -> str:
     total = round(seconds)
@@ -115,19 +117,22 @@ class TrackTableModel(QAbstractTableModel):
             return
         self._sort_column = column
         self._sort_order = order
-        field = COLUMNS[column][1]
         self.layoutAboutToBeChanged.emit()
-        self._tracks.sort(
-            key=lambda track: _sort_key(track, field),
-            reverse=order == Qt.SortOrder.DescendingOrder,
-        )
+        self._tracks = self._ordered_tracks(self._tracks)
         self.layoutChanged.emit()
+
+    def _ordered_tracks(self, tracks: list[Track]) -> list[Track]:
+        field = COLUMNS[self._sort_column][1]
+        return sorted(
+            tracks,
+            key=lambda track: _sort_key(track, field),
+            reverse=self._sort_order == Qt.SortOrder.DescendingOrder,
+        )
 
     def set_tracks(self, tracks: list[Track]) -> None:
         self.beginResetModel()
-        self._tracks = tracks
+        self._tracks = self._ordered_tracks(tracks)
         self.endResetModel()
-        self.sort(self._sort_column, self._sort_order)
 
     def track_at(self, row: int) -> Track | None:
         if 0 <= row < len(self._tracks):
@@ -260,7 +265,7 @@ class AlbumGridModel(QAbstractListModel):
     def _store_icon(self, key: str, icon: QIcon) -> None:
         self._icons[key] = icon
         self._icons.move_to_end(key)
-        while len(self._icons) > 256:
+        while len(self._icons) > ALBUM_ICON_CACHE_SIZE:
             self._icons.popitem(last=False)
 
     def _placeholder_icon(self) -> QIcon:
@@ -307,6 +312,10 @@ class AlbumGridModel(QAbstractListModel):
             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
             Qt.TransformationMode.SmoothTransformation,
         )
+        if pixmap.width() > self._cover_size or pixmap.height() > self._cover_size:
+            x = max(0, (pixmap.width() - self._cover_size) // 2)
+            y = max(0, (pixmap.height() - self._cover_size) // 2)
+            pixmap = pixmap.copy(x, y, self._cover_size, self._cover_size)
         self._store_icon(key, QIcon(pixmap))
         row = self._row_by_key.get(key)
         if row is not None and 0 <= row < len(self._albums):

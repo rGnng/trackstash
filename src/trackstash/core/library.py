@@ -280,6 +280,12 @@ class LibraryService:
         errors: list[str] = []
         seen_destinations: set[str] = set()
         total = len(files)
+        library_root = canonical_path(library.path)
+        library_prefix = library_root.rstrip("/") + "/"
+        known_paths = {
+            path: value[0] for path, value in self.db.paths_for_library(library.id).items()
+        }
+        known_hashes = self.db.hash_map(library.id) if duplicate_policy != "keep" else {}
 
         for index, source in enumerate(files):
             if progress:
@@ -294,17 +300,15 @@ class LibraryService:
             tags = apply_tag_edits(metadata.tags, edits)
 
             source_path = canonical_path(str(source))
-            in_place = source_path == canonical_path(library.path) or source_path.startswith(
-                canonical_path(library.path).rstrip("/") + "/"
-            )
+            in_place = source_path == library_root or source_path.startswith(library_prefix)
             if in_place:
                 destination = Path(source_path)
                 rel = relative_path(source_path, library.path)
                 if rel is None:
                     errors.append(f"{source}: not under the selected library")
                     continue
-                existing = self.db.get_track_by_path(source_path)
-                if existing is not None:
+                existing_id = known_paths.get(source_path)
+                if existing_id is not None:
                     items.append(
                         ImportPlanItem(
                             source=source,
@@ -315,7 +319,7 @@ class LibraryService:
                             edits=edits,
                             action="skip",
                             in_place=True,
-                            duplicate_of=existing.id,
+                            duplicate_of=existing_id,
                             warning="Already indexed",
                         )
                     )
@@ -323,8 +327,8 @@ class LibraryService:
             else:
                 rel = render_template(template, tags, metadata, extension=source.suffix.lower())
                 destination = Path(library.path) / rel
-                duplicate = self.db.find_by_content_hash(content_hash(source))
-                if duplicate is not None and duplicate_policy == "skip":
+                duplicate_id = known_hashes.get(content_hash(source)) if known_hashes else None
+                if duplicate_id is not None and duplicate_policy == "skip":
                     items.append(
                         ImportPlanItem(
                             source=source,
@@ -334,31 +338,37 @@ class LibraryService:
                             tags=tags,
                             edits=edits,
                             action="skip",
-                            duplicate_of=duplicate.id,
+                            duplicate_of=duplicate_id,
                             warning="Duplicate content already in the library",
                         )
                     )
                     continue
-                if duplicate is not None and duplicate_policy == "replace":
-                    items.append(
-                        ImportPlanItem(
-                            source=source,
-                            destination=Path(duplicate.path),
-                            relative_path=relative_path(duplicate.path, library.path) or rel,
-                            metadata=metadata,
-                            tags=tags,
-                            edits=edits,
-                            action="replace",
-                            duplicate_of=duplicate.id,
-                            replace_track_id=duplicate.id,
-                            warning="Existing duplicate will be moved to the Trash",
+                if duplicate_id is not None and duplicate_policy == "replace":
+                    duplicate = self.db.get_track(duplicate_id)
+                    if duplicate is not None:
+                        items.append(
+                            ImportPlanItem(
+                                source=source,
+                                destination=Path(duplicate.path),
+                                relative_path=relative_path(duplicate.path, library.path) or rel,
+                                metadata=metadata,
+                                tags=tags,
+                                edits=edits,
+                                action="replace",
+                                duplicate_of=duplicate.id,
+                                replace_track_id=duplicate.id,
+                                warning="Existing duplicate will be moved to the Trash",
+                            )
                         )
-                    )
-                    continue
+                        continue
 
             destination_key = str(destination)
-            collision = destination.exists() or destination_key in seen_destinations
-            if collision or self.db.get_track_by_path(str(destination)) is not None:
+            collision = (
+                destination.exists()
+                or destination_key in seen_destinations
+                or destination_key in known_paths
+            )
+            if collision:
                 if duplicate_policy == "replace":
                     collision = True
                 else:
@@ -367,7 +377,7 @@ class LibraryService:
                     while (
                         candidate.exists()
                         or str(candidate) in seen_destinations
-                        or self.db.get_track_by_path(str(candidate)) is not None
+                        or str(candidate) in known_paths
                     ):
                         rel = with_collision_suffix(rel, counter)
                         candidate = Path(library.path) / rel
@@ -404,6 +414,7 @@ class LibraryService:
         imported: list[Track] = []
         skipped: list[str] = []
         errors = list(plan.errors)
+        content_hashes: dict[str, str] = {}
         copied = 0
         moved = 0
         undoable = True
@@ -440,7 +451,10 @@ class LibraryService:
                 if not tracks:
                     raise RuntimeError("Track was not indexed")
                 track = tracks[0]
-                self.db.update_content_hash(track.id, content_hash(destination))
+                try:
+                    content_hashes[track.id] = content_hash(destination)
+                except OSError:
+                    pass
                 self.db.add_operation_item(
                     operation_id,
                     song_id=track.id,
@@ -475,6 +489,10 @@ class LibraryService:
                             self._safe_move(destination, item.source)
                     except OSError:
                         pass
+        try:
+            self.db.update_content_hashes(content_hashes)
+        except Exception as exc:
+            errors.append(f"Could not store content fingerprints: {exc}")
         self.db.finish_operation(operation_id)
         if progress:
             progress("Importing", total, total, f"{len(imported)} imported")
@@ -569,11 +587,14 @@ class LibraryService:
         known_by_id = {value[0]: path for path, value in known.items()}
         known_hashes = self.db.hash_map(library.id)
         moved_old_paths: set[str] = set()
+        digests: dict[str, str] = {}
         for metadata in metadata_list:
             try:
                 digest = content_hash(metadata.path)
             except OSError:
                 digest = ""
+            if digest:
+                digests[metadata.path] = digest
             old_id = known_hashes.get(digest) if digest else None
             old_path = known_by_id.get(old_id or "")
             if old_id and old_path in missing_set:
@@ -589,13 +610,14 @@ class LibraryService:
         if progress:
             progress("Updating database", 0, len(metadata_list), "")
         tracks = self.db.upsert_tracks(metadata_list, library)
+        hash_updates: dict[str, str] = {}
         for index, track in enumerate(tracks, start=1):
-            try:
-                self.db.update_content_hash(track.id, content_hash(track.path))
-            except OSError:
-                pass
+            cached_digest = digests.get(track.path)
+            if cached_digest:
+                hash_updates[track.id] = cached_digest
             if progress:
                 progress("Updating database", index, len(tracks), track.path)
+        self.db.update_content_hashes(hash_updates)
         pruned = 0
         if prune and missing:
             missing_ids = [known[path][0] for path in missing if path in known]
@@ -617,9 +639,11 @@ class LibraryService:
         self, song_ids: Sequence[str], edits: Mapping[str, object]
     ) -> list[TagChange]:
         changes: list[TagChange] = []
+        tracks_by_id = {track.id: track for track in self.db.get_tracks_by_ids(song_ids)}
+        tags_by_id = self.db.load_tag_sets(song_ids)
         for song_id in song_ids:
-            track = self.db.get_track(song_id)
-            tags = self.db.load_tag_set(song_id)
+            track = tracks_by_id.get(song_id)
+            tags = tags_by_id.get(song_id)
             if track is None or tags is None:
                 continue
             before = tagset_to_dict(tags)
@@ -655,7 +679,8 @@ class LibraryService:
         start: int = 1,
     ) -> list[TagChange]:
         """Preview sequential track numbers, grouped per album/disc."""
-        tracks = [track for song_id in song_ids if (track := self.db.get_track(song_id))]
+        tracks = self.db.get_tracks_by_ids(song_ids)
+        tags_by_id = self.db.load_tag_sets(song_ids)
         groups: dict[tuple[str, str], list[Track]] = {}
         for track in tracks:
             key = (track.album_id, track.disc if per_disc else "")
@@ -671,7 +696,7 @@ class LibraryService:
             )
             total = len(group)
             for offset, track in enumerate(group):
-                tags = self.db.load_tag_set(track.id)
+                tags = tags_by_id.get(track.id)
                 if tags is None:
                     continue
                 after = apply_tag_edits(
@@ -708,13 +733,18 @@ class LibraryService:
         updated: list[Track] = []
         errors: list[str] = []
         total = len(changes)
+        tracks_by_id = {
+            track.id: track
+            for track in self.db.get_tracks_by_ids([change.song_id for change in changes])
+        }
+        libraries: dict[str, Library] = {}
         for index, change in enumerate(changes, start=1):
             if progress:
                 progress("Auto-numbering", index - 1, total, change.path)
             if not change.changed_fields:
                 continue
             try:
-                track = self.db.get_track(change.song_id)
+                track = tracks_by_id.get(change.song_id)
                 if track is None:
                     raise ValueError("Track not found")
                 path = Path(track.path)
@@ -729,7 +759,12 @@ class LibraryService:
                 write_tags(path, edits)
                 self._restore_mtime(path, stat_before)
                 metadata = read_metadata(path)
-                library = self.db.get_library(track.library_id or "")
+                library_id = track.library_id or ""
+                library = libraries.get(library_id)
+                if library is None:
+                    library = self.db.get_library(library_id)
+                    if library is not None:
+                        libraries[library_id] = library
                 if library is None:
                     raise ValueError("Library not found")
                 written = self.db.upsert_tracks([metadata], library)
@@ -810,12 +845,15 @@ class LibraryService:
         updated: list[Track] = []
         errors: list[str] = []
         total = len(song_ids)
+        tracks_by_id = {track.id: track for track in self.db.get_tracks_by_ids(song_ids)}
+        tags_by_id = self.db.load_tag_sets(song_ids)
+        libraries: dict[str, Library] = {}
         for index, song_id in enumerate(song_ids, start=1):
             if progress:
                 progress("Writing tags", index - 1, total, song_id)
             try:
-                track = self.db.get_track(song_id)
-                tags = self.db.load_tag_set(song_id)
+                track = tracks_by_id.get(song_id)
+                tags = tags_by_id.get(song_id)
                 if track is None or tags is None:
                     raise ValueError("Track not found")
                 path = Path(track.path)
@@ -829,7 +867,12 @@ class LibraryService:
                 write_tags(path, edits)
                 self._restore_mtime(path, stat_before)
                 metadata = read_metadata(path)
-                library = self.db.get_library(track.library_id or "")
+                library_id = track.library_id or ""
+                library = libraries.get(library_id)
+                if library is None:
+                    library = self.db.get_library(library_id)
+                    if library is not None:
+                        libraries[library_id] = library
                 if library is None:
                     raise ValueError("Library not found")
                 written = self.db.upsert_tracks([metadata], library)
@@ -870,23 +913,47 @@ class LibraryService:
     ) -> list[OrganizePlanItem]:
         template = template or self.default_template
         items: list[OrganizePlanItem] = []
+        tracks_by_id = {track.id: track for track in self.db.get_tracks_by_ids(song_ids)}
+        tags_by_id = self.db.load_tag_sets(song_ids)
+        libraries: dict[str, Library | None] = {}
+        known_paths: dict[str, dict[str, str]] = {}
         for song_id in song_ids:
-            track = self.db.get_track(song_id)
-            tags = self.db.load_tag_set(song_id)
+            track = tracks_by_id.get(song_id)
+            tags = tags_by_id.get(song_id)
             if track is None or tags is None or track.library_id is None:
                 continue
-            library = self.db.get_library(track.library_id)
+            library = libraries.get(track.library_id)
+            if track.library_id not in libraries:
+                library = self.db.get_library(track.library_id)
+                libraries[track.library_id] = library
             if library is None:
                 continue
-            metadata = read_metadata(track.path)
+            if library.id not in known_paths:
+                known_paths[library.id] = {
+                    path: value[0] for path, value in self.db.paths_for_library(library.id).items()
+                }
+            metadata = TrackMetadata(
+                path=track.path,
+                format=track.format,
+                codec=track.codec,
+                duration=track.duration,
+                bitrate=track.bitrate,
+                sample_rate=track.sample_rate,
+                channels=track.channels,
+                bit_depth=track.bit_depth,
+                lossless=track.lossless,
+                file_size=track.file_size,
+                mtime=track.mtime,
+                tags=tags,
+            )
             rel = render_template(template, tags, metadata, extension=Path(track.path).suffix)
             new_path = str(Path(library.path) / rel)
             new_id = song_uuid(library.id_namespace, rel)
             collision = False
             if new_path != track.path:
-                existing = self.db.get_track_by_path(new_path)
+                existing_id = known_paths[library.id].get(new_path)
                 collision = Path(new_path).exists() or (
-                    existing is not None and existing.id != track.id
+                    existing_id is not None and existing_id != track.id
                 )
             items.append(
                 OrganizePlanItem(
@@ -976,10 +1043,13 @@ class LibraryService:
         trashed = 0
         errors: list[str] = []
         total = len(song_ids)
+        tracks_by_id = {track.id: track for track in self.db.get_tracks_by_ids(song_ids)}
+        tags_by_id = self.db.load_tag_sets(song_ids)
+        to_delete: list[str] = []
         for index, song_id in enumerate(song_ids, start=1):
             if progress:
                 progress("Deleting", index - 1, total, song_id)
-            track = self.db.get_track(song_id)
+            track = tracks_by_id.get(song_id)
             if track is None:
                 continue
             try:
@@ -994,15 +1064,20 @@ class LibraryService:
                         "track_id": song_id,
                         "path": track.path,
                         "library_id": track.library_id,
-                        "tags": tagset_to_dict(self.db.load_tag_set(song_id) or TagSet()),
+                        "tags": tagset_to_dict(tags_by_id.get(song_id) or TagSet()),
                     },
                     result={"trashed": delete_files},
                 )
-                deleted += self.db.delete_tracks([song_id])
+                to_delete.append(song_id)
             except Exception as exc:
                 errors.append(f"{track.path}: {exc}")
             if progress:
                 progress("Deleting", index, total, "")
+        if to_delete:
+            try:
+                deleted = self.db.delete_tracks(to_delete)
+            except Exception as exc:
+                errors.append(f"Could not remove tracks from the index: {exc}")
         self.db.finish_operation(operation_id)
         return DeleteResult(
             operation_id=operation_id,
@@ -1018,9 +1093,9 @@ class LibraryService:
     # ------------------------------------------------------------------
     # Duplicates
 
-    def exact_duplicates(self) -> list[list[Track]]:
+    def exact_duplicates(self, library_id: str | None = None) -> list[list[Track]]:
         """Return duplicate groups confirmed by a full content hash."""
-        groups = self.db.exact_duplicate_groups()
+        groups = self.db.exact_duplicate_groups(library_id)
         confirmed: list[list[Track]] = []
         for group in groups:
             by_hash: dict[str, list[Track]] = {}
@@ -1032,6 +1107,28 @@ class LibraryService:
                 by_hash.setdefault(digest, []).append(track)
             confirmed.extend(items for items in by_hash.values() if len(items) > 1)
         return confirmed
+
+    def index_content_hashes(self, library_id: str, *, progress: Progress | None = None) -> int:
+        """Fingerprint tracks that do not have a cached content hash yet."""
+        song_ids = self.db.track_ids_missing_content_hash(library_id)
+        tracks = self.db.get_tracks_by_ids(song_ids)
+        if not tracks:
+            return 0
+        updates: dict[str, str] = {}
+        total = len(tracks)
+        workers = min(8, max(1, (os.cpu_count() or 2)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(content_hash, track.path): track for track in tracks}
+            for index, future in enumerate(as_completed(futures), start=1):
+                track = futures[future]
+                try:
+                    updates[track.id] = future.result()
+                except OSError:
+                    pass
+                if progress:
+                    progress("Fingerprinting files", index, total, track.path)
+        self.db.update_content_hashes(updates)
+        return len(updates)
 
     # ------------------------------------------------------------------
     # ReKey and artwork
@@ -1118,9 +1215,11 @@ class LibraryService:
             return [str(exc)]
         errors: list[str] = []
         total = len(song_ids)
+        tracks_by_id = {track.id: track for track in self.db.get_tracks_by_ids(song_ids)}
+        libraries: dict[str, Library] = {}
         for index, song_id in enumerate(song_ids, start=1):
             try:
-                track = self.db.get_track(song_id)
+                track = tracks_by_id.get(song_id)
                 if track is None:
                     raise ValueError("Track not found")
                 path = Path(track.path)
@@ -1129,7 +1228,12 @@ class LibraryService:
                 write_artwork(path, normalized, mime="image/jpeg")
                 self._restore_mtime(path, stat_before)
                 metadata = read_metadata(track.path)
-                library = self.db.get_library(track.library_id or "")
+                library_id = track.library_id or ""
+                library = libraries.get(library_id)
+                if library is None:
+                    library = self.db.get_library(library_id)
+                    if library is not None:
+                        libraries[library_id] = library
                 if library is None:
                     raise ValueError("Library not found")
                 self.db.upsert_tracks([metadata], library)
@@ -1141,9 +1245,11 @@ class LibraryService:
 
     def remove_artwork(self, song_ids: Sequence[str]) -> list[str]:
         errors: list[str] = []
+        tracks_by_id = {track.id: track for track in self.db.get_tracks_by_ids(song_ids)}
+        libraries: dict[str, Library] = {}
         for song_id in song_ids:
             try:
-                track = self.db.get_track(song_id)
+                track = tracks_by_id.get(song_id)
                 if track is None:
                     raise ValueError("Track not found")
                 path = Path(track.path)
@@ -1151,7 +1257,12 @@ class LibraryService:
                 remove_artwork(track.path)
                 self._restore_mtime(path, stat_before)
                 metadata = read_metadata(track.path)
-                library = self.db.get_library(track.library_id or "")
+                library_id = track.library_id or ""
+                library = libraries.get(library_id)
+                if library is None:
+                    library = self.db.get_library(library_id)
+                    if library is not None:
+                        libraries[library_id] = library
                 if library is None:
                     raise ValueError("Library not found")
                 self.db.upsert_tracks([metadata], library)
