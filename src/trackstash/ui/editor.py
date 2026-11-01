@@ -5,7 +5,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
-    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -36,9 +35,6 @@ FIELD_KEYS = (
     "composer",
     "bpm",
     "musical_key",
-    "isrc",
-    "label",
-    "catalog_number",
 )
 MIXED = object()
 
@@ -102,39 +98,56 @@ class TrackInfoEditor(QWidget):
         self.artwork_info.setStyleSheet("color: palette(mid);")
         body_layout.addWidget(self.artwork_info)
 
-        self.form = QFormLayout()
-        self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        self.form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.form.setVerticalSpacing(4)
         self.lines: dict[str, QLineEdit] = {}
-        for key, label in (
-            ("title", "Title"),
-            ("artists", "Artist"),
-            ("album", "Album"),
-            ("album_artist", "Album artist"),
-            ("genres", "Genre"),
-            ("year", "Year"),
-            ("track", "Track"),
-            ("track_total", "Track total"),
-            ("disc", "Disc"),
-            ("disc_total", "Disc total"),
-            ("comment", "Comment"),
-            ("composer", "Composer"),
-            ("bpm", "BPM"),
-            ("musical_key", "Key"),
-            ("isrc", "ISRC"),
-            ("label", "Label"),
-            ("catalog_number", "Catalog"),
-        ):
-            line = QLineEdit(body)
+        fields_host = QWidget(body)
+        fields_layout = QVBoxLayout(fields_host)
+        fields_layout.setContentsMargins(0, 0, 0, 0)
+        fields_layout.setSpacing(4)
+
+        def make_block(key: str, label: str) -> QWidget:
+            block = QWidget(fields_host)
+            block_layout = QVBoxLayout(block)
+            block_layout.setContentsMargins(0, 0, 0, 0)
+            block_layout.setSpacing(1)
+            caption = QLabel(label, block)
+            caption.setStyleSheet("color: palette(mid); font-size: 11px;")
+            line = QLineEdit(block)
             line.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             line.textEdited.connect(lambda _text, field=key: self._field_changed(field))
+            block_layout.addWidget(caption)
+            block_layout.addWidget(line)
             self.lines[key] = line
-            self.form.addRow(label, line)
+            return block
+
+        def add_full(key: str, label: str) -> None:
+            fields_layout.addWidget(make_block(key, label))
+
+        def add_row(specs: tuple[tuple[str, str], ...]) -> None:
+            row = QHBoxLayout()
+            row.setSpacing(4)
+            for key, label in specs:
+                row.addWidget(make_block(key, label), 1)
+            fields_layout.addLayout(row)
+
+        add_full("title", "Title")
+        add_full("artists", "Artist")
+        add_full("album", "Album")
+        add_full("album_artist", "Album Artist")
+        add_row((("genres", "Genre"), ("year", "Year")))
+        add_row((("track", "Track"), ("track_total", "Track Total")))
+        add_row((("disc", "Disc"), ("disc_total", "Disc Total")))
+        add_full("comment", "Comment")
+        add_row(
+            (
+                ("composer", "Composer"),
+                ("bpm", "BPM"),
+                ("musical_key", "Key"),
+            )
+        )
         self._normal_font = QFont(self.lines["title"].font())
         self._italic_font = QFont(self._normal_font)
         self._italic_font.setItalic(True)
-        body_layout.addLayout(self.form)
+        body_layout.addWidget(fields_host)
         body_layout.addStretch(1)
 
         scroll.setWidget(body)
@@ -204,9 +217,6 @@ class TrackInfoEditor(QWidget):
             "composer": tags.composer,
             "bpm": tags.bpm,
             "musical_key": tags.musical_key,
-            "isrc": tags.isrc,
-            "label": tags.label,
-            "catalog_number": tags.catalog_number,
         }
 
     def _field_changed(self, field: str) -> None:
