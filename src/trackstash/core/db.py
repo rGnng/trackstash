@@ -220,6 +220,70 @@ CREATE VIRTUAL TABLE IF NOT EXISTS ts_track_fts USING fts5(
 """
 
 
+_TAG_SET_FIELDS = (
+    "album_artist",
+    "composer",
+    "lyricist",
+    "lyrics",
+    "isrc",
+    "bpm",
+    "musical_key",
+    "sort_title",
+    "sort_artist",
+    "sort_album_artist",
+    "sort_album",
+    "musicbrainz_recording_id",
+    "musicbrainz_release_id",
+    "musicbrainz_artist_id",
+    "label",
+    "catalog_number",
+    "barcode",
+    "release_country",
+    "media",
+    "script",
+    "language",
+    "conductor",
+    "orchestra",
+    "ensemble",
+    "work",
+    "movement",
+    "movement_number",
+    "original_date",
+    "replaygain_track_gain",
+    "replaygain_track_peak",
+    "replaygain_album_gain",
+    "replaygain_album_peak",
+)
+
+
+def _tagset_from_row(row: sqlite3.Row, values: Sequence[sqlite3.Row]) -> TagSet:
+    tags = TagSet(
+        title=row["title"],
+        album=row["album"],
+        year=row["year"],
+        track=str(row["track"] or ""),
+        track_total=str(row["track_total"] or ""),
+        disc=str(row["disc"] or ""),
+        disc_total=str(row["disc_total"] or ""),
+        comment=row["comments"],
+    )
+    for key in _TAG_SET_FIELDS:
+        setattr(tags, key, row[key] or "")
+    tags.compilation = bool(row["compilation"])
+    for value_row in values:
+        key = value_row["field_key"]
+        value = value_row["value"]
+        if key == "artists":
+            tags.artists.append(value)
+        elif key == "genres":
+            tags.genres.append(value)
+        else:
+            tags.custom.setdefault(key, []).append(value)
+    if not tags.genres and row["genre"]:
+        tags.genres = [row["genre"]]
+    return tags
+
+
 @dataclass(slots=True)
 class Library:
     """A managed library root."""
@@ -1065,6 +1129,31 @@ class Database:
             rows = connection.execute(sql, parameters).fetchall()
         return [str(row["id"]) for row in rows]
 
+    def track_ids_for_albums(
+        self, album_ids: Sequence[str], library_id: str | None = None
+    ) -> list[str]:
+        """Return ordered track IDs for several albums in album order."""
+        if not album_ids:
+            return []
+        by_album: dict[str, list[str]] = {}
+        with self.connect() as connection:
+            for start in range(0, len(album_ids), 500):
+                chunk = list(album_ids[start : start + 500])
+                marks = ",".join("?" for _ in chunk)
+                parameters: list[Any] = list(chunk)
+                sql = f"SELECT album_id, id FROM songs WHERE album_id IN ({marks})"
+                if library_id:
+                    sql += " AND library_id = ?"
+                    parameters.append(library_id)
+                sql += (
+                    " ORDER BY CAST(disc AS INTEGER), disc COLLATE NOCASE,"
+                    " CAST(track AS INTEGER), track COLLATE NOCASE,"
+                    " title COLLATE NOCASE"
+                )
+                for row in connection.execute(sql, parameters).fetchall():
+                    by_album.setdefault(str(row["album_id"]), []).append(str(row["id"]))
+        return [song_id for album_id in album_ids for song_id in by_album.get(album_id, [])]
+
     def get_track(self, song_id: str) -> Track | None:
         with self.connect() as connection:
             row = connection.execute(self._TRACK_SELECT + " WHERE s.id = ?", (song_id,)).fetchone()
@@ -1133,12 +1222,17 @@ class Database:
     def get_tracks_by_ids(self, song_ids: Sequence[str]) -> list[Track]:
         if not song_ids:
             return []
-        marks = ",".join("?" for _ in song_ids)
+        by_id: dict[str, Track] = {}
         with self.connect() as connection:
-            rows = connection.execute(
-                self._TRACK_SELECT + f" WHERE s.id IN ({marks})", list(song_ids)
-            ).fetchall()
-        by_id = {row["id"]: _row_to_track(row) for row in rows}
+            for start in range(0, len(song_ids), 500):
+                chunk = list(song_ids[start : start + 500])
+                marks = ",".join("?" for _ in chunk)
+                rows = connection.execute(
+                    self._TRACK_SELECT + f" WHERE s.id IN ({marks})", chunk
+                ).fetchall()
+                for row in rows:
+                    track = _row_to_track(row)
+                    by_id[track.id] = track
         return [by_id[song_id] for song_id in song_ids if song_id in by_id]
 
     def get_track_by_path(self, path: str | Path) -> Track | None:
@@ -1228,64 +1322,41 @@ class Database:
                 " WHERE song_id = ? ORDER BY field_key, position",
                 (song_id,),
             ).fetchall()
-        tags = TagSet(
-            title=row["title"],
-            album=row["album"],
-            year=row["year"],
-            track=str(row["track"] or ""),
-            track_total=str(row["track_total"] or ""),
-            disc=str(row["disc"] or ""),
-            disc_total=str(row["disc_total"] or ""),
-            comment=row["comments"],
-        )
-        for key in (
-            "album_artist",
-            "composer",
-            "lyricist",
-            "lyrics",
-            "isrc",
-            "bpm",
-            "musical_key",
-            "sort_title",
-            "sort_artist",
-            "sort_album_artist",
-            "sort_album",
-            "musicbrainz_recording_id",
-            "musicbrainz_release_id",
-            "musicbrainz_artist_id",
-            "label",
-            "catalog_number",
-            "barcode",
-            "release_country",
-            "media",
-            "script",
-            "language",
-            "conductor",
-            "orchestra",
-            "ensemble",
-            "work",
-            "movement",
-            "movement_number",
-            "original_date",
-            "replaygain_track_gain",
-            "replaygain_track_peak",
-            "replaygain_album_gain",
-            "replaygain_album_peak",
-        ):
-            setattr(tags, key, row[key] or "")
-        tags.compilation = bool(row["compilation"])
-        for value_row in values:
-            key = value_row["field_key"]
-            value = value_row["value"]
-            if key == "artists":
-                tags.artists.append(value)
-            elif key == "genres":
-                tags.genres.append(value)
-            else:
-                tags.custom.setdefault(key, []).append(value)
-        if not tags.genres and row["genre"]:
-            tags.genres = [row["genre"]]
-        return tags
+        return _tagset_from_row(row, values)
+
+    def load_tag_sets(self, song_ids: Sequence[str]) -> dict[str, TagSet]:
+        if not song_ids:
+            return {}
+        values_by_id: dict[str, list[sqlite3.Row]] = {}
+        rows: list[sqlite3.Row] = []
+        with self.connect() as connection:
+            for start in range(0, len(song_ids), 500):
+                chunk = list(song_ids[start : start + 500])
+                marks = ",".join("?" for _ in chunk)
+                parameters = list(chunk)
+                rows.extend(
+                    connection.execute(
+                        "SELECT s.id, s.title, s.genre, s.year, s.track,"
+                        " s.track_total, s.disc, s.disc_total, s.comments,"
+                        " al.title AS album, t.* FROM songs s"
+                        " JOIN albums al ON al.id = s.album_id"
+                        " LEFT JOIN ts_song_tags t ON t.song_id = s.id"
+                        f" WHERE s.id IN ({marks})",
+                        parameters,
+                    ).fetchall()
+                )
+                value_rows = connection.execute(
+                    "SELECT song_id, field_key, value FROM ts_tag_value"
+                    f" WHERE song_id IN ({marks})"
+                    " ORDER BY song_id, field_key, position",
+                    parameters,
+                ).fetchall()
+                for value_row in value_rows:
+                    values_by_id.setdefault(str(value_row["song_id"]), []).append(value_row)
+        return {
+            str(row["id"]): _tagset_from_row(row, values_by_id.get(str(row["id"]), []))
+            for row in rows
+        }
 
     def delete_tracks(self, song_ids: Sequence[str]) -> int:
         if not song_ids:

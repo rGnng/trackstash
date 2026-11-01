@@ -49,8 +49,10 @@ def test_main_window_lists_and_filters(qtbot: QtBot, tmp_path: Path, audio_facto
 
     assert window.model.rowCount() == 1
     window.search_edit.setText("UI Song")
+    qtbot.wait(300)
     assert window.model.rowCount() == 1
     window.search_edit.setText("no such track")
+    qtbot.wait(300)
     assert window.model.rowCount() == 0
     window.search_edit.clear()
     window.format_filter.setCurrentText("MP3")
@@ -234,12 +236,18 @@ def test_qt_top_bar_replaces_menu(qtbot: QtBot, tmp_path: Path) -> None:
     assert window.settings_button.toolTip() == "Settings…"
     assert window.refresh_button.toolTip() == "Refresh (Ctrl+R)"
     assert not hasattr(window, "filters_button")
+    assert window.service.strong_order is True
+    assert window.service.preserve_mtime is True
+    assert window.service.artwork_max_size == 1000
+    assert window.service.artwork_quality == 90
+    assert window.service.artwork_crop_square is True
     assert not hasattr(window, "about_action")
     assert not hasattr(window, "help_action")
     assert not hasattr(window, "quit_action")
     assert not hasattr(window, "close_action")
     assert not hasattr(window, "selection_actions")
-    assert not hasattr(window, "status_summary")
+    assert not window.statusBar().isHidden()
+    assert window.status_summary.text() == "No library selected"
 
 
 def test_inline_editor_and_column_persistence(
@@ -299,7 +307,22 @@ def test_left_editor_cannot_be_collapsed(qtbot: QtBot, tmp_path: Path) -> None:
     assert not window.splitter.isCollapsible(0)
     window.splitter.setSizes([0, 1000])
     assert window.editor.isVisible()
-    assert window.editor.width() >= 300
+    assert window.editor.width() >= 280
+
+
+def test_editor_width_defaults_and_persists(qtbot: QtBot, tmp_path: Path) -> None:
+    database = Database(tmp_path / "editor-width.sqlite")
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    assert window.editor.width() == 280
+
+    window.splitter.setSizes([360, 800])
+    window.close()
+    reopened = MainWindow(database)
+    qtbot.addWidget(reopened)
+    reopened.show()
+    assert reopened.editor.width() == 360
 
 
 def test_window_size_persists(qtbot: QtBot, tmp_path: Path) -> None:
@@ -341,7 +364,8 @@ def test_settings_can_choose_track_columns(qtbot: QtBot, tmp_path: Path) -> None
     assert dialog.column_checks["codec"].isChecked()
     assert dialog.column_checks["path"].isChecked() is False
     assert dialog.values()[1] == ["title", "codec"]
-    assert dialog.values()[2:] == ("date_added", "desc")
+    assert dialog.values()[2:4] == ("date_added", "desc")
+    assert dialog.values()[4:] == (True, True, True, 1000, 90, True)
 
 
 def test_settings_contains_library_actions(qtbot: QtBot, tmp_path: Path) -> None:
@@ -357,6 +381,7 @@ def test_settings_contains_library_actions(qtbot: QtBot, tmp_path: Path) -> None
     )
     qtbot.addWidget(dialog)
     assert dialog.tabs.count() == 3
+    assert dialog.status_bar_checkbox.isChecked()
     assert set(dialog.library_buttons) == {
         "manage_libraries",
         "find_duplicates",
@@ -378,6 +403,27 @@ def test_settings_contains_library_actions(qtbot: QtBot, tmp_path: Path) -> None
     qtbot.addWidget(empty)
     assert empty.library_buttons["manage_libraries"].isEnabled()
     assert not empty.library_buttons["organize"].isEnabled()
+
+
+def test_status_bar_defaults_and_can_be_hidden(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.tracks_view_button.click()
+    window.table.selectRow(0)
+    assert window.statusBar().isVisible()
+    assert "UI Library" in window.status_summary.text()
+    assert "1 selected" in window.status_selection.text()
+
+    database.set_setting("status_bar_visible", "0")
+    hidden = MainWindow(database)
+    qtbot.addWidget(hidden)
+    hidden.show()
+    assert not hidden.statusBar().isVisible()
 
 
 def test_inline_save_and_table_sorting(
@@ -403,6 +449,7 @@ def test_inline_save_and_table_sorting(
     window.save_inline_edits({"title": "Inline Edited"})
     tracks = database.list_tracks(library_id=library.id)
     assert tracks[0].title == "Inline Edited"
+    assert "Inline Edited" in tracks[0].path
     assert window.editor.lines["title"].text() == "Inline Edited"
 
     window.table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
@@ -445,6 +492,7 @@ def test_album_multi_selection(
     window.tabs.setCurrentIndex(1)
     assert window.album_view.selectionMode() == QAbstractItemView.SelectionMode.ExtendedSelection
     window.album_view.selectAll()
+    qtbot.wait(150)
     ids = window.selected_track_ids()
     assert len(ids) == 2
     assert window.editor.artwork_info.text()
@@ -466,6 +514,81 @@ def test_album_multi_selection(
     window.save_inline_edits(window.editor.pending_edits())
     updated = database.list_tracks(library_id=library.id)
     assert all(track.album == "Batch Album" for track in updated)
+
+
+def test_editor_reports_multiple_artworks(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from io import BytesIO
+
+    from mutagen.flac import FLAC, Picture
+    from PIL import Image
+
+    from trackstash.core.metadata import read_metadata
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    track = database.list_tracks(library_id=library.id)[0]
+    audio = FLAC(track.path)
+    for kind in (3, 4):
+        buffer = BytesIO()
+        Image.new("RGB", (16, 16), (kind * 20, 50, 90)).save(buffer, "JPEG")
+        picture = Picture()
+        picture.type = kind
+        picture.mime = "image/jpeg"
+        picture.width = 16
+        picture.height = 16
+        picture.data = buffer.getvalue()
+        audio.add_picture(picture)
+    audio.save()
+    LibraryService(database).db.upsert_tracks([read_metadata(track.path)], library)
+
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.tracks_view_button.click()
+    window.table.selectRow(0)
+    assert "2 artworks" in window.editor.artwork_info.text()
+
+
+def test_artwork_paste_is_applied_on_save(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtWidgets import QApplication
+
+    from trackstash.core.metadata import read_artwork
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    track = database.list_tracks(library_id=library.id)[0]
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.refresh_libraries()
+    window.tracks_view_button.click()
+    window.table.selectRow(0)
+    assert track.has_artwork is False
+
+    image = QImage(40, 20, QImage.Format.Format_RGB32)
+    image.fill(QColor(20, 120, 180))
+    QApplication.clipboard().setImage(image)
+    window.editor._paste_artwork()
+    assert window.editor.pending_artwork_data() is not None
+    assert window.editor.save_button.isEnabled()
+    assert database.get_track(track.id).has_artwork is False
+
+    window.save_inline_edits({})
+    refreshed = database.get_track(track.id)
+    assert refreshed is not None
+    assert refreshed.has_artwork is True
+    assert len(read_artwork(refreshed.path)) == 1
+
+    window.editor._set_pending_artwork_removal()
+    assert window.editor.pending_artwork_removal()
+    window.save_inline_edits({})
+    assert database.get_track(track.id).has_artwork is False
+    assert read_artwork(refreshed.path) == []
+    QApplication.clipboard().clear()
 
 
 def test_inline_pending_changes_and_go_to_album(

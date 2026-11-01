@@ -307,7 +307,7 @@ refactoring. Priorities below are relative to the post-v1 phase.
 
 | ID | Priority | Requirement |
 |---|---|---|
-| SET-01 | P0 | Settings MUST cover database location, backup retention, default ID3 version, import template defaults, album grid sorting, automatic organization, and default deletion behavior. |
+| SET-01 | P0 | Settings MUST cover database location, backup retention, default ID3 version, import template defaults, album grid sorting, status-bar visibility, strong ordering, mtime preservation, artwork compression, automatic organization, and default deletion behavior. |
 | SET-02 | P1 | The database MUST be backed up and restorable from the application. |
 | SET-03 | P1 | The user SHOULD be able to export and import settings. |
 | SET-04 | P1 | A diagnostics bundle (logs, versions, database statistics; no personal metadata) SHOULD be exportable. |
@@ -552,10 +552,20 @@ Unsupported files are never modified.
   covers resize within fixed column/row gaps to fill the viewport. The album
   grid sorts by date added descending by default; field and order are
   configurable in Settings.
-- **Media editor (left):** artwork, editable canonical tags, pending-change
-  highlighting, and a fixed Save/Revert row. Multi-selection shows shared values
-  and italic `Multiple` placeholders for mixed fields. Save opens a diff preview
-  before writing.
+- **Status bar:** shows the active library, track count, and selection count. It
+  is enabled by default and configurable in Settings.
+- **Strong ordering:** tag edits that change the destination path MUST move the
+  file immediately using the organization template; the move is journaled
+  separately so it can be undone. Enabled by default.
+- **Mtime preservation:** tag and artwork edits to indexed files MUST preserve
+  the original modification time by default; configurable in Settings.
+- **Media editor (left):** selectable artwork, editable canonical tags,
+  pending-change highlighting, and a fixed Save/Revert row. Multi-selection shows
+  shared values and italic `Multiple` placeholders for mixed fields. Save opens a
+  tag diff preview before writing. Artwork can be pasted from the clipboard, added
+  from an image file, or deleted with Delete/Backspace; a selected artwork area
+  supports Add/Paste/Delete in its context menu. Pending artwork is normalized
+  and embedded on Save, replacing all existing artwork.
 - **Action bar:** no main menu bar. Import, undo/redo, refresh, format, artwork
   filtering, view switching, and Settings live in the top bar.
 - **Import:** a top-bar Import… button. Scans, adding libraries, relocation, and
@@ -639,10 +649,12 @@ TrackStash is a native desktop application built with Python 3.12+ and PySide6
   thread, and the model is updated in bounded batches on the main thread.
 - **Hashing:** `hashlib` SHA-256 over size plus partial head/tail hashing, with
   full hashing deferred until duplicate review or move detection requires it.
-- **Artwork:** embedded artwork is read from the selected album's first track
-  only when the album enters the viewport, then cached in memory with a bounded
-  LRU. No cover files are written to disk; `ts_artwork` tracks per-track embedded
-  artwork metadata and `albums.artwork` stays `NULL`.
+- **Artwork:** embedded artwork is read asynchronously from the selected album's
+  first track only when the album enters the viewport, then cached in memory with
+  a bounded LRU. No cover files are written to disk; `ts_artwork` tracks per-track
+  embedded artwork metadata and `albums.artwork` stays `NULL`. New artwork is
+  normalized to JPEG (default 1000 px long edge, quality 90) and optionally
+  cropped to a square before embedding.
 - **Safety:** the journal records prior tag state, artwork, paths, and IDs before
   any mutation. Imports, moves, organization, tag writes, and index deletions are
   journaled. Index-only deletes are undoable; files moved to the macOS Trash are

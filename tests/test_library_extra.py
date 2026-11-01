@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 
 from trackstash.core.db import Database
 from trackstash.core.library import LibraryService
-from trackstash.core.metadata import read_metadata, write_tags
+from trackstash.core.metadata import read_artwork, read_metadata, write_tags
 
 
 @pytest.fixture()
@@ -106,6 +107,78 @@ def test_redo_tag_and_organize(setup: tuple) -> None:
     assert redo_move is not None and redo_move.undone == 1
     assert database.get_track(plan[0].new_id) is not None
     assert read_metadata(database.get_track(plan[0].new_id).path).tags.title == "Redone Title"
+
+
+def test_strong_order_moves_file_after_tag_edit(setup: tuple) -> None:
+    database, service, library = setup
+    service.strong_order = True
+    track = database.list_tracks(library_id=library.id)[0]
+    old_path = Path(track.path)
+
+    result = service.update_tags([track.id], {"album": "Moved Album", "title": "Moved Song"})
+    assert not result.errors
+    assert len(result.updated) == 1
+    updated = result.updated[0]
+    assert updated.id != track.id
+    assert "Moved Album" in updated.path
+    assert "Moved Song" in updated.path
+    assert not old_path.exists()
+    assert Path(updated.path).is_file()
+
+
+def test_preserve_mtime_when_editing_indexed_file(setup: tuple) -> None:
+    database, service, library = setup
+    track = database.list_tracks(library_id=library.id)[0]
+    path = Path(track.path)
+    old_ns = 1_600_000_000_000_000_000
+    os.utime(path, ns=(old_ns, old_ns))
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE songs SET mtime = ? WHERE id = ?",
+            (old_ns / 1_000_000_000, track.id),
+        )
+
+    result = service.update_tags([track.id], {"title": "Preserved Mtime"})
+    assert not result.errors
+    updated = result.updated[0]
+    assert Path(updated.path).stat().st_mtime_ns == old_ns
+    assert updated.mtime == pytest.approx(old_ns / 1_000_000_000)
+
+    service.preserve_mtime = False
+    current = database.list_tracks(library_id=library.id)[0]
+    result = service.update_tags([current.id], {"title": "Changed Mtime"})
+    assert not result.errors
+    assert Path(result.updated[0].path).stat().st_mtime_ns != old_ns
+
+
+def test_replacing_artwork_removes_all_existing_pictures(setup: tuple) -> None:
+    from io import BytesIO
+
+    from mutagen.flac import FLAC, Picture
+    from PIL import Image
+
+    database, service, library = setup
+    track = database.list_tracks(library_id=library.id)[0]
+    path = Path(track.path)
+    audio = FLAC(path)
+    for kind in (3, 4):
+        buffer = BytesIO()
+        Image.new("RGB", (16, 16), (kind * 20, 40, 80)).save(buffer, "JPEG")
+        picture = Picture()
+        picture.type = kind
+        picture.mime = "image/jpeg"
+        picture.width = 16
+        picture.height = 16
+        picture.data = buffer.getvalue()
+        audio.add_picture(picture)
+    audio.save()
+    assert len(read_artwork(path)) == 2
+
+    replacement = BytesIO()
+    Image.new("RGB", (32, 32), (10, 120, 200)).save(replacement, "JPEG")
+    errors = service.set_artwork([track.id], replacement.getvalue())
+    assert errors == []
+    assert len(read_artwork(path)) == 1
 
 
 def test_artwork_embed_extract_remove(setup: tuple, tmp_path: Path) -> None:

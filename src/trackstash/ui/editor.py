@@ -2,13 +2,25 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtGui import QFont, QPixmap, QResizeEvent
+from pathlib import Path
+
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, QObject, QPoint, Qt, Signal
+from PySide6.QtGui import (
+    QContextMenuEvent,
+    QFont,
+    QKeyEvent,
+    QKeySequence,
+    QMouseEvent,
+    QPixmap,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -49,8 +61,6 @@ class TrackInfoEditor(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("trackInfoEditor")
-        self.setStyleSheet("#trackInfoEditor { background-color: palette(base); }")
         self._track: Track | None = None
         self._tags: TagSet | None = None
         self._multi_mode = False
@@ -61,6 +71,12 @@ class TrackInfoEditor(QWidget):
         self._dirty: set[str] = set()
         self._loading = False
         self._artwork_pixmap = QPixmap()
+        self._has_artwork = False
+        self._artwork_selected = False
+        self._pending_artwork: bytes | None = None
+        self._pending_artwork_remove = False
+        self._saved_artwork_pixmap = QPixmap()
+        self._saved_artwork_info = "No artwork"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -84,9 +100,10 @@ class TrackInfoEditor(QWidget):
         self.artwork = QLabel(body)
         self.artwork.setMinimumSize(1, 1)
         self.artwork.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.artwork.setStyleSheet(
-            "border: 1px solid #3A4554; background-color: #1B212B; color: #AAB4C3;"
-        )
+        self.artwork.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.artwork.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.artwork.installEventFilter(self)
+        self._apply_artwork_style()
         self.artwork.setText("No artwork")
         body_layout.addWidget(self.artwork)
         self.artwork_info = QLabel("", body)
@@ -165,11 +182,139 @@ class TrackInfoEditor(QWidget):
         self._set_fields_enabled(False)
         self._refresh_dirty()
 
+    def _apply_artwork_style(self) -> None:
+        border = "2px solid palette(highlight)" if self._artwork_selected else "1px solid #3A4554"
+        self.artwork.setStyleSheet(f"border: {border}; background-color: #1B212B; color: #AAB4C3;")
+
+    def _set_artwork_selected(self, selected: bool) -> None:
+        if self._artwork_selected == selected:
+            return
+        self._artwork_selected = selected
+        self._apply_artwork_style()
+
+    def _clipboard_image_bytes(self) -> bytes | None:
+        clipboard = QApplication.clipboard()
+        mime = clipboard.mimeData()
+        if mime is None:
+            return None
+        if mime.hasImage():
+            image = clipboard.image()
+            if not image.isNull():
+                buffer = QBuffer()
+                buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+                image.save(buffer, "PNG")  # type: ignore[call-overload]
+                return buffer.data().data()
+        if mime.hasUrls():
+            for url in mime.urls():
+                if not url.isLocalFile():
+                    continue
+                path = Path(url.toLocalFile())
+                if path.suffix.lower() in {
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".webp",
+                    ".bmp",
+                    ".gif",
+                    ".tif",
+                    ".tiff",
+                }:
+                    try:
+                        return path.read_bytes()
+                    except OSError:
+                        continue
+        for image_format in ("image/png", "image/jpeg"):
+            if mime.hasFormat(image_format):
+                return mime.data(image_format).data()
+        return None
+
+    def _paste_artwork(self) -> None:
+        data = self._clipboard_image_bytes()
+        if data:
+            self.set_pending_artwork(data)
+
+    def set_pending_artwork(self, data: bytes) -> None:
+        pixmap = QPixmap()
+        if not data or not pixmap.loadFromData(data):
+            return
+        self._pending_artwork = data
+        self._pending_artwork_remove = False
+        self._artwork_pixmap = pixmap
+        self._has_artwork = True
+        self._render_artwork()
+        self.artwork_info.setText("Pasted image · will be saved")
+        self._set_artwork_selected(True)
+        self._refresh_dirty()
+
+    def _set_pending_artwork_removal(self) -> None:
+        if not self._has_artwork:
+            return
+        self._pending_artwork = None
+        self._pending_artwork_remove = True
+        self._artwork_pixmap = QPixmap()
+        self._has_artwork = False
+        self._render_artwork()
+        self.artwork_info.setText("Artwork will be removed on save")
+        self._refresh_dirty()
+
+    def pending_artwork_data(self) -> bytes | None:
+        return self._pending_artwork
+
+    def pending_artwork_removal(self) -> bool:
+        return self._pending_artwork_remove
+
+    def _reset_pending_artwork(self) -> None:
+        self._pending_artwork = None
+        self._pending_artwork_remove = False
+        self._artwork_pixmap = self._saved_artwork_pixmap
+        self._has_artwork = not self._artwork_pixmap.isNull()
+        self.artwork_info.setText(self._saved_artwork_info)
+        self._render_artwork()
+        self._apply_artwork_style()
+
+    def _show_artwork_menu(self, position: QPoint) -> None:
+        menu = QMenu(self.artwork)
+        add_or_replace = menu.addAction("Replace Artwork…" if self._has_artwork else "Add Artwork…")
+        paste = menu.addAction("Paste Artwork")
+        delete = None
+        if self._has_artwork:
+            menu.addSeparator()
+            delete = menu.addAction("Delete Artwork")
+        chosen = menu.exec(position)
+        if chosen is add_or_replace:
+            self.cover_requested.emit()
+        elif chosen is paste:
+            self._paste_artwork()
+        elif delete is not None and chosen is delete:
+            self._set_pending_artwork_removal()
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         self._update_artwork_size()
         super().resizeEvent(event)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.artwork:
+            if (
+                isinstance(event, QMouseEvent)
+                and event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                self.artwork.setFocus()
+                self._set_artwork_selected(True)
+            elif event.type() == QEvent.Type.FocusOut:
+                self._set_artwork_selected(False)
+            elif isinstance(event, QKeyEvent):
+                if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                    self._set_pending_artwork_removal()
+                    return True
+                if event.matches(QKeySequence.StandardKey.Paste):
+                    self._paste_artwork()
+                    return True
+            elif isinstance(event, QContextMenuEvent):
+                self.artwork.setFocus()
+                self._set_artwork_selected(True)
+                self._show_artwork_menu(event.globalPos())
+                return True
         if (
             hasattr(self, "_scroll")
             and watched is self._scroll.viewport()
@@ -283,6 +428,8 @@ class TrackInfoEditor(QWidget):
                 if value != self._baseline.get(key):
                     dirty.add(key)
         self._dirty = dirty
+        artwork_dirty = self._pending_artwork is not None or self._pending_artwork_remove
+        self._apply_artwork_style()
         for key, widget in self.lines.items():
             caption = self.labels.get(key)
             if key in dirty:
@@ -293,8 +440,8 @@ class TrackInfoEditor(QWidget):
                 widget.setStyleSheet("")
                 if caption is not None:
                     caption.setStyleSheet("font-size: 11px;")
-        if dirty:
-            count = len(dirty)
+        if dirty or artwork_dirty:
+            count = len(dirty) + (1 if artwork_dirty else 0)
             self.pending_label.setText(f"{count} pending change{'s' if count != 1 else ''}")
             self.pending_label.setStyleSheet("color: #D99A3D; font-weight: 600;")
             self.save_button.setEnabled(True)
@@ -307,12 +454,14 @@ class TrackInfoEditor(QWidget):
 
     def clear(self) -> None:
         self._loading = True
+        self._reset_pending_artwork()
         self._track = None
         self._tags = None
         self._multi_mode = False
         self._multi_tracks = []
         self._multi_tags = []
         self._multi_base = {}
+        self._set_artwork_selected(False)
         for line in self.lines.values():
             line.clear()
             line.setPlaceholderText("")
@@ -324,6 +473,8 @@ class TrackInfoEditor(QWidget):
 
     def load_track(self, track: Track, tags: TagSet) -> None:
         self._loading = True
+        self._reset_pending_artwork()
+        self._set_artwork_selected(False)
         self._track = track
         self._tags = tags
         self._multi_mode = False
@@ -340,6 +491,8 @@ class TrackInfoEditor(QWidget):
 
     def load_multi(self, tracks: list[Track], tags_list: list[TagSet]) -> None:
         self._loading = True
+        self._reset_pending_artwork()
+        self._set_artwork_selected(False)
         self._track = None
         self._tags = None
         self._multi_mode = True
@@ -362,9 +515,15 @@ class TrackInfoEditor(QWidget):
         self._refresh_dirty()
 
     def set_artwork(self, pixmap: QPixmap, info: str) -> None:
+        self._pending_artwork = None
+        self._pending_artwork_remove = False
+        self._saved_artwork_pixmap = pixmap
+        self._saved_artwork_info = info
         self._artwork_pixmap = pixmap
+        self._has_artwork = not pixmap.isNull()
         self._render_artwork()
         self.artwork_info.setText(info)
+        self._apply_artwork_style()
 
     def edits(self) -> dict[str, object]:
         result: dict[str, object] = {}
@@ -389,14 +548,16 @@ class TrackInfoEditor(QWidget):
 
     @property
     def has_pending_changes(self) -> bool:
-        return bool(self._dirty)
+        return (
+            bool(self._dirty) or self._pending_artwork is not None or (self._pending_artwork_remove)
+        )
 
     @property
     def multi_mode(self) -> bool:
         return self._multi_mode
 
     def _emit_save(self) -> None:
-        if (self._track is not None or self._multi_mode) and self._dirty:
+        if (self._track is not None or self._multi_mode) and self.has_pending_changes:
             self.save_requested.emit(self.pending_edits())
 
     def _revert(self) -> None:

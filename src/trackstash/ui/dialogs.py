@@ -712,6 +712,12 @@ class SettingsDialog(QDialog):
         visible_columns: Sequence[str] = (),
         album_sort: str = "date_added",
         album_order: str = "desc",
+        status_bar_visible: bool = True,
+        strong_order: bool = True,
+        preserve_mtime: bool = True,
+        artwork_max_size: int = 1000,
+        artwork_quality: int = 90,
+        artwork_crop_square: bool = True,
         selection_available: bool = True,
         parent: QWidget | None = None,
     ) -> None:
@@ -720,7 +726,7 @@ class SettingsDialog(QDialog):
         self.requested_action: str | None = None
         self.library_buttons: dict[str, QPushButton] = {}
         self.setWindowTitle("TrackStash Settings")
-        self.setMinimumSize(680, 520)
+        self.setMinimumSize(680, 620)
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget(self)
 
@@ -761,6 +767,43 @@ class SettingsDialog(QDialog):
         self.album_order.setCurrentIndex(order_index if order_index >= 0 else 0)
         albums_form.addRow("Order", self.album_order)
         general_layout.addWidget(albums_group)
+
+        editing_group = QGroupBox("Editing", general_tab)
+        editing_layout = QVBoxLayout(editing_group)
+        self.strong_order_checkbox = QCheckBox(
+            "Strong ordering: move files immediately after tag changes", editing_group
+        )
+        self.strong_order_checkbox.setChecked(strong_order)
+        editing_layout.addWidget(self.strong_order_checkbox)
+        self.preserve_mtime_checkbox = QCheckBox(
+            "Preserve file modification time when editing indexed files",
+            editing_group,
+        )
+        self.preserve_mtime_checkbox.setChecked(preserve_mtime)
+        editing_layout.addWidget(self.preserve_mtime_checkbox)
+        general_layout.addWidget(editing_group)
+
+        artwork_group = QGroupBox("Artwork", general_tab)
+        artwork_form = QFormLayout(artwork_group)
+        self.artwork_max_size = QSpinBox(artwork_group)
+        self.artwork_max_size.setRange(64, 10000)
+        self.artwork_max_size.setValue(artwork_max_size)
+        artwork_form.addRow("Maximum long edge (px)", self.artwork_max_size)
+        self.artwork_quality = QSpinBox(artwork_group)
+        self.artwork_quality.setRange(1, 100)
+        self.artwork_quality.setValue(artwork_quality)
+        artwork_form.addRow("JPEG quality", self.artwork_quality)
+        self.artwork_crop = QComboBox(artwork_group)
+        self.artwork_crop.addItem("Fit to square", True)
+        self.artwork_crop.addItem("Original aspect ratio", False)
+        crop_index = self.artwork_crop.findData(artwork_crop_square)
+        self.artwork_crop.setCurrentIndex(crop_index if crop_index >= 0 else 0)
+        artwork_form.addRow("Aspect ratio", self.artwork_crop)
+        general_layout.addWidget(artwork_group)
+
+        self.status_bar_checkbox = QCheckBox("Show status bar", general_tab)
+        self.status_bar_checkbox.setChecked(status_bar_visible)
+        general_layout.addWidget(self.status_bar_checkbox)
 
         backup_row = QHBoxLayout()
         backup_row.addWidget(QLabel("Create a consistent SQLite backup.", general_tab))
@@ -867,13 +910,19 @@ class SettingsDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Backup failed", str(exc))
 
-    def values(self) -> tuple[str, list[str], str, str]:
+    def values(self) -> tuple[str, list[str], str, str, bool, bool, bool, int, int, bool]:
         visible = [key for key, check in self.column_checks.items() if check.isChecked()]
         return (
             self.template_edit.text().strip() or DEFAULT_TEMPLATE,
             visible or [key for key, _ in self.column_checks.items()],
             str(self.album_sort.currentData() or "date_added"),
             str(self.album_order.currentData() or "desc"),
+            self.status_bar_checkbox.isChecked(),
+            self.strong_order_checkbox.isChecked(),
+            self.preserve_mtime_checkbox.isChecked(),
+            self.artwork_max_size.value(),
+            self.artwork_quality.value(),
+            bool(self.artwork_crop.currentData()),
         )
 
 

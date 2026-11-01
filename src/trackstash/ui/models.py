@@ -8,8 +8,12 @@ from PySide6.QtCore import (
     QAbstractListModel,
     QAbstractTableModel,
     QModelIndex,
+    QObject,
     QPersistentModelIndex,
+    QRunnable,
     Qt,
+    QThreadPool,
+    Signal,
 )
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 
@@ -139,6 +143,36 @@ def _sort_key(track: Track, field: str) -> str | float | tuple[int, str]:
     return str(value or "").casefold()
 
 
+class _CoverSignals(QObject):
+    loaded = Signal(str, bytes)
+    failed = Signal(str)
+
+
+class _CoverTask(QRunnable):
+    def __init__(self, key: str, path: str, signals: _CoverSignals) -> None:
+        super().__init__()
+        self.key = key
+        self.path = path
+        self.signals = signals
+
+    def _emit(self, name: str, *args: object) -> None:
+        try:
+            signal = getattr(self.signals, name)
+            signal.emit(*args)
+        except RuntimeError:
+            pass
+
+    def run(self) -> None:
+        try:
+            artworks = read_artwork(self.path)
+            if artworks and artworks[0].data:
+                self._emit("loaded", self.key, artworks[0].data)
+            else:
+                self._emit("failed", self.key)
+        except Exception:
+            self._emit("failed", self.key)
+
+
 class AlbumGridModel(QAbstractListModel):
     """A virtualized album grid model with lazy artwork icons."""
 
@@ -146,7 +180,14 @@ class AlbumGridModel(QAbstractListModel):
         super().__init__()
         self._albums = albums or []
         self._icons: OrderedDict[str, QIcon] = OrderedDict()
+        self._pending: set[str] = set()
+        self._row_by_key: dict[str, int] = {}
         self._cover_size = 180
+        self._cover_pool = QThreadPool.globalInstance()
+        self._cover_pool.setMaxThreadCount(4)
+        self._cover_signals = _CoverSignals()
+        self._cover_signals.loaded.connect(self._cover_loaded, Qt.ConnectionType.QueuedConnection)
+        self._cover_signals.failed.connect(self._cover_failed, Qt.ConnectionType.QueuedConnection)
 
     def rowCount(self, parent: QModelIndex | QPersistentModelIndex | None = None) -> int:
         return 0 if parent is not None and parent.isValid() else len(self._albums)
@@ -172,6 +213,7 @@ class AlbumGridModel(QAbstractListModel):
     def set_albums(self, albums: list[AlbumRow]) -> None:
         self.beginResetModel()
         self._albums = albums
+        self._row_by_key = {self._key(album): row for row, album in enumerate(albums)}
         self.endResetModel()
 
     def set_cover_size(self, size: int) -> None:
@@ -186,42 +228,59 @@ class AlbumGridModel(QAbstractListModel):
             return self._albums[row]
         return None
 
-    def _icon(self, album: AlbumRow) -> QIcon:
-        key = f"{album.id}:{album.artwork_checksum}"
-        cached = self._icons.get(key)
-        if cached is not None:
-            self._icons.move_to_end(key)
-            return cached
-        size = self._cover_size
-        pixmap: QPixmap | None = None
-        if album.artwork_song_path:
-            try:
-                artworks = read_artwork(album.artwork_song_path)
-            except Exception:
-                artworks = []
-            if artworks:
-                source = QPixmap()
-                if source.loadFromData(artworks[0].data) and not source.isNull():
-                    pixmap = source.scaled(
-                        size,
-                        size,
-                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-        if pixmap is None:
-            pixmap = QPixmap(size, size)
-            color = QColor.fromHsv(abs(hash(album.id)) % 360, 90, 120)
-            pixmap.fill(color)
-            painter = QPainter(pixmap)
-            painter.setPen(QColor("#F5F7FA"))
-            font = painter.font()
-            font.setPointSize(max(10, int(size * 0.23)))
-            painter.setFont(font)
-            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "♪")
-            painter.end()
-        icon = QIcon(pixmap)
+    @staticmethod
+    def _key(album: AlbumRow) -> str:
+        return f"{album.id}:{album.artwork_checksum}:{album.artwork_song_path or ''}"
+
+    def _store_icon(self, key: str, icon: QIcon) -> None:
         self._icons[key] = icon
         self._icons.move_to_end(key)
         while len(self._icons) > 256:
             self._icons.popitem(last=False)
+
+    def _placeholder_icon(self, album: AlbumRow) -> QIcon:
+        size = self._cover_size
+        pixmap = QPixmap(size, size)
+        color = QColor.fromHsv(abs(hash(album.id)) % 360, 90, 120)
+        pixmap.fill(color)
+        painter = QPainter(pixmap)
+        painter.setPen(QColor("#F5F7FA"))
+        font = painter.font()
+        font.setPointSize(max(10, int(size * 0.23)))
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "♪")
+        painter.end()
+        return QIcon(pixmap)
+
+    def _icon(self, album: AlbumRow) -> QIcon:
+        key = self._key(album)
+        cached = self._icons.get(key)
+        if cached is not None:
+            self._icons.move_to_end(key)
+            return cached
+        icon = self._placeholder_icon(album)
+        self._store_icon(key, icon)
+        if album.artwork_song_path and key not in self._pending:
+            self._pending.add(key)
+            self._cover_pool.start(_CoverTask(key, album.artwork_song_path, self._cover_signals))
         return icon
+
+    def _cover_loaded(self, key: str, data: bytes) -> None:
+        self._pending.discard(key)
+        source = QPixmap()
+        if not source.loadFromData(data) or source.isNull():
+            return
+        pixmap = source.scaled(
+            self._cover_size,
+            self._cover_size,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._store_icon(key, QIcon(pixmap))
+        row = self._row_by_key.get(key)
+        if row is not None and 0 <= row < len(self._albums):
+            index = self.index(row, 0)
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DecorationRole])
+
+    def _cover_failed(self, key: str) -> None:
+        self._pending.discard(key)

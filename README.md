@@ -30,6 +30,8 @@ consistent without cloud dependencies.
   action bar, so buttons, menus, and other controls share one appearance instead
   of mixing native macOS and Qt-drawn widgets. Settings and library actions are
   available from the gear button. The window remembers its size between launches.
+  A status bar shows the active library and selection count; it is on by default
+  and can be disabled in Settings.
 - **Configurable columns.** Right-click the track header to show or hide columns,
   auto-fit all widths, or drag sections. Order, width, and visibility persist and
   are also editable in Settings.
@@ -42,7 +44,12 @@ consistent without cloud dependencies.
   are also available from the track and album context menus.
 - **Artwork.** View, embed, replace, remove, and extract front-cover artwork. Covers are read from embedded tags on demand for visible albums; there is no disk cover cache.
 - **Organization.** Rename and move files with a token template, live preview,
-  collision detection, UUID remapping, journaling, and undo.
+  collision detection, UUID remapping, journaling, and undo. Strong ordering is
+  on by default: tag changes that affect the destination move the file
+  immediately, and the move is journaled separately for undo.
+- **Editing safety.** File modification times are preserved by default when
+  editing indexed files. Both strong ordering and mtime preservation can be
+  changed in Settings.
 - **Library maintenance.** Quick and full scans, changed-file refresh, missing
   file review, duplicate review, and index-only or system-Trash deletion.
 - **Undo and redo.** Journaled tag edits, imports, moves, and index-only

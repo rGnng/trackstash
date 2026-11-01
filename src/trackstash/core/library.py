@@ -16,6 +16,7 @@ from typing import Any
 
 from send2trash import send2trash
 
+from trackstash.core.artwork import normalize_artwork
 from trackstash.core.db import Database, Library, Track
 from trackstash.core.identity import (
     canonical_path,
@@ -232,9 +233,19 @@ class LibraryService:
         db: Database,
         *,
         default_template: str = DEFAULT_TEMPLATE,
+        strong_order: bool = False,
+        preserve_mtime: bool = True,
+        artwork_max_size: int = 1000,
+        artwork_quality: int = 90,
+        artwork_crop_square: bool = True,
     ) -> None:
         self.db = db
         self.default_template = default_template
+        self.strong_order = strong_order
+        self.preserve_mtime = preserve_mtime
+        self.artwork_max_size = artwork_max_size
+        self.artwork_quality = artwork_quality
+        self.artwork_crop_square = artwork_crop_square
 
     # ------------------------------------------------------------------
     # Import
@@ -714,7 +725,9 @@ class LibraryService:
                     "track": change.after.track,
                     "track_total": change.after.track_total,
                 }
+                stat_before = path.stat()
                 write_tags(path, edits)
+                self._restore_mtime(path, stat_before)
                 metadata = read_metadata(path)
                 library = self.db.get_library(track.library_id or "")
                 if library is None:
@@ -742,7 +755,47 @@ class LibraryService:
         self.db.finish_operation(operation_id)
         if progress:
             progress("Auto-numbering", total, total, "")
+        updated = self._strong_organize(updated, errors)
         return TagUpdateResult(operation_id=operation_id, updated=updated, errors=errors)
+
+    def _restore_mtime(self, path: Path, stat: os.stat_result) -> None:
+        if not self.preserve_mtime:
+            return
+        try:
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        except OSError:
+            pass
+
+    def _strong_organize(self, tracks: Sequence[Track], errors: list[str]) -> list[Track]:
+        if not self.strong_order or not tracks:
+            return list(tracks)
+        items = self.preview_organize([track.id for track in tracks])
+        movable: list[OrganizePlanItem] = []
+        by_old_id: dict[str, OrganizePlanItem] = {}
+        destinations: set[str] = set()
+        for item in items:
+            if item.unchanged:
+                continue
+            if item.collision:
+                errors.append(f"{item.old_path}: destination already exists")
+                continue
+            if item.new_path in destinations:
+                errors.append(f"{item.old_path}: duplicate destination {item.new_path}")
+                continue
+            destinations.add(item.new_path)
+            movable.append(item)
+            by_old_id[item.old_id] = item
+        if not movable:
+            return list(tracks)
+        result = self.organize(movable)
+        errors.extend(result.errors)
+        final: list[Track] = []
+        for track in tracks:
+            moved_item = by_old_id.get(track.id)
+            current = self.db.get_track(moved_item.new_id if moved_item is not None else track.id)
+            if current is not None:
+                final.append(current)
+        return final
 
     def update_tags(
         self,
@@ -772,7 +825,9 @@ class LibraryService:
                 if abs(stat.st_mtime - track.mtime) >= 1 or stat.st_size != track.file_size:
                     raise RuntimeError("File changed on disk; rescan before editing")
                 before = tagset_to_dict(tags)
+                stat_before = path.stat()
                 write_tags(path, edits)
+                self._restore_mtime(path, stat_before)
                 metadata = read_metadata(path)
                 library = self.db.get_library(track.library_id or "")
                 if library is None:
@@ -804,6 +859,7 @@ class LibraryService:
             if progress:
                 progress("Writing tags", index, total, "")
         self.db.finish_operation(operation_id)
+        updated = self._strong_organize(updated, errors)
         return TagUpdateResult(operation_id=operation_id, updated=updated, errors=errors)
 
     # ------------------------------------------------------------------
@@ -1051,6 +1107,15 @@ class LibraryService:
         mime: str = "",
         progress: Progress | None = None,
     ) -> list[str]:
+        try:
+            normalized = normalize_artwork(
+                data,
+                max_size=self.artwork_max_size,
+                quality=self.artwork_quality,
+                crop_square=self.artwork_crop_square,
+            )
+        except ValueError as exc:
+            return [str(exc)]
         errors: list[str] = []
         total = len(song_ids)
         for index, song_id in enumerate(song_ids, start=1):
@@ -1058,7 +1123,11 @@ class LibraryService:
                 track = self.db.get_track(song_id)
                 if track is None:
                     raise ValueError("Track not found")
-                write_artwork(track.path, data, mime=mime)
+                path = Path(track.path)
+                stat_before = path.stat()
+                remove_artwork(path)
+                write_artwork(path, normalized, mime="image/jpeg")
+                self._restore_mtime(path, stat_before)
                 metadata = read_metadata(track.path)
                 library = self.db.get_library(track.library_id or "")
                 if library is None:
@@ -1077,7 +1146,10 @@ class LibraryService:
                 track = self.db.get_track(song_id)
                 if track is None:
                     raise ValueError("Track not found")
+                path = Path(track.path)
+                stat_before = path.stat()
                 remove_artwork(track.path)
+                self._restore_mtime(path, stat_before)
                 metadata = read_metadata(track.path)
                 library = self.db.get_library(track.library_id or "")
                 if library is None:
@@ -1289,7 +1361,9 @@ class LibraryService:
                 raise FileNotFoundError(path_value)
             edits = dict(tags_data)
             edits.pop("custom", None)
+            stat_before = path.stat()
             write_tags(path, edits)
+            self._restore_mtime(path, stat_before)
             metadata = read_metadata(path)
             library_id = prior.get("library_id")
             library = self.db.get_library(library_id) if library_id else None

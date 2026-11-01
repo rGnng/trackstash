@@ -14,6 +14,7 @@ from PySide6.QtCore import (
     QProcess,
     QSize,
     Qt,
+    QTimer,
     QUrl,
 )
 from PySide6.QtGui import (
@@ -80,11 +81,18 @@ class AlbumGridView(QListView):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.resize_callback: Callable[[int], None] | None = None
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(60)
+        self._resize_timer.timeout.connect(self._notify_resize)
+
+    def _notify_resize(self) -> None:
+        if self.resize_callback is not None:
+            self.resize_callback(self.viewport().width())
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        if self.resize_callback is not None:
-            self.resize_callback(self.viewport().width())
+        self._resize_timer.start()
 
 
 DEFAULT_WIDTHS = {
@@ -121,8 +129,32 @@ class MainWindow(QMainWindow):
             template = DEFAULT_TEMPLATE
             db.set_setting("default_template", template)
         self.service.default_template = template
+        self.service.strong_order = db.get_setting("strong_order", "1") != "0"
+        self.service.preserve_mtime = db.get_setting("preserve_mtime", "1") != "0"
+        try:
+            self.service.artwork_max_size = int(db.get_setting("artwork_max_size", "1000") or 1000)
+            self.service.artwork_quality = int(db.get_setting("artwork_quality", "90") or 90)
+        except ValueError:
+            self.service.artwork_max_size = 1000
+            self.service.artwork_quality = 90
+        self.service.artwork_crop_square = db.get_setting("artwork_crop_square", "1") != "0"
         self._album_sort = db.get_setting("album_sort_field", "date_added")
         self._album_sort_desc = db.get_setting("album_sort_order", "desc") != "asc"
+        self._status_bar_visible = db.get_setting("status_bar_visible", "1") != "0"
+        try:
+            self._editor_width = int(db.get_setting("editor_width", "280") or 280)
+        except ValueError:
+            self._editor_width = 280
+        self._editor_width = max(280, min(400, self._editor_width))
+        self._selection_timer = QTimer(self)
+        self._selection_timer.setSingleShot(True)
+        self._selection_timer.setInterval(100)
+        self._selection_timer.timeout.connect(self._apply_selection)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(250)
+        self._search_timer.timeout.connect(self.refresh_tracks)
+        self._albums_dirty = True
         self._current_library_id: str | None = None
         self._album_filter_id: str | None = None
         self._album_filter_title = ""
@@ -145,10 +177,13 @@ class MainWindow(QMainWindow):
         self._create_actions()
         self.menuBar().setVisible(False)
         self._create_central_widget()
+        self._create_status_bar()
+        self.statusBar().setVisible(self._status_bar_visible)
         self.refresh_libraries()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.db.set_setting("window_size", f"{self.width()}x{self.height()}")
+        self.db.set_setting("editor_width", str(self.editor.width()))
         super().closeEvent(event)
 
     # ------------------------------------------------------------------
@@ -264,10 +299,10 @@ class MainWindow(QMainWindow):
             "QSplitter::handle:hover { background-color: #48D1B5; }"
         )
         self.editor = TrackInfoEditor(splitter)
-        self.editor.setMinimumWidth(300)
+        self.editor.setMinimumWidth(280)
         self.editor.setMaximumWidth(400)
         self.editor.save_requested.connect(self.save_inline_edits)
-        self.editor.cover_requested.connect(self.set_cover)
+        self.editor.cover_requested.connect(self.stage_cover)
         self.editor.remove_cover_requested.connect(self.remove_cover)
         self.editor.extract_cover_requested.connect(self.extract_cover)
         self.editor.reveal_requested.connect(self.reveal_selected)
@@ -322,7 +357,7 @@ class MainWindow(QMainWindow):
         self.search_edit.setPlaceholderText("Search title, artist, album, genre, path…")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.setFixedSize(180, 28)
-        self.search_edit.textChanged.connect(self.refresh_tracks)
+        self.search_edit.textChanged.connect(self._search_changed)
         library_row.addWidget(self.search_edit)
 
         self.format_filter = QComboBox(right)
@@ -365,12 +400,18 @@ class MainWindow(QMainWindow):
         self.import_button.setFixedSize(88, 28)
         library_row.addWidget(self.import_button)
         self.settings_button = QToolButton(right)
-        self.settings_button.setText("⚙")
+        settings_icon = QIcon.fromTheme("preferences-system")
+        if settings_icon.isNull():
+            self.settings_button.setText("⚙")
+        else:
+            self.settings_button.setIcon(settings_icon)
         self.settings_button.setToolTip("Settings…")
-        self.settings_button.setStyleSheet("font-size: 16px;")
+        self.settings_button.setIconSize(QSize(16, 16))
         self.settings_button.setFixedSize(30, 28)
         self.settings_button.clicked.connect(self.settings_action.trigger)
         library_row.addWidget(self.settings_button)
+        for tool_button in (self.undo_button, self.redo_button, self.refresh_button):
+            tool_button.setIconSize(QSize(16, 16))
         right_layout.addLayout(library_row)
 
         self.tabs = QStackedWidget(right)
@@ -427,6 +468,8 @@ class MainWindow(QMainWindow):
         self.album_view.setMovement(QListView.Movement.Static)
         self.album_view.setUniformItemSizes(True)
         self.album_view.setWordWrap(True)
+        self.album_view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.album_view.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.album_view.setIconSize(QSize(ALBUM_MIN_COVER, ALBUM_MIN_COVER))
         self.album_view.setSpacing(0)
         self.album_view.resize_callback = self._update_album_grid
@@ -446,7 +489,7 @@ class MainWindow(QMainWindow):
         splitter.setCollapsible(1, False)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([340, 1100])
+        splitter.setSizes([self._editor_width, 1100])
         outer_layout.addWidget(splitter, 1)
 
         self.setCentralWidget(outer)
@@ -456,6 +499,35 @@ class MainWindow(QMainWindow):
 
     def _filters_changed(self, *_args: object) -> None:
         self.refresh_tracks()
+
+    def _create_status_bar(self) -> None:
+        self.status_summary = QLabel("", self)
+        self.status_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.statusBar().addWidget(self.status_summary)
+        self.status_selection = QLabel("", self)
+        self.status_selection.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.statusBar().addWidget(self.status_selection)
+        self._library_label = ""
+        self._total_tracks = 0
+        self._update_status()
+
+    def _selection_item_count(self) -> int:
+        if self.tabs.currentIndex() == 1:
+            selection = self.album_view.selectionModel()
+            return len(selection.selectedIndexes()) if selection is not None else 0
+        return len(self.selected_track_ids())
+
+    def _update_status(self) -> None:
+        if not hasattr(self, "status_summary"):
+            return
+        base = (
+            f"{self._library_label} · {self._total_tracks} tracks"
+            if self._library_label
+            else "No library selected"
+        )
+        selected = self._selection_item_count()
+        self.status_summary.setText(base)
+        self.status_selection.setText(f"{selected} selected" if selected else "")
 
     # ------------------------------------------------------------------
     # Library selection
@@ -496,14 +568,25 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Track and album views
 
+    def _search_changed(self, text: str) -> None:
+        if not text.strip():
+            self._search_timer.stop()
+            self.refresh_tracks()
+            return
+        self._search_timer.start()
+
     def refresh_tracks(self) -> None:
         query = self.search_edit.text().strip() if hasattr(self, "search_edit") else ""
         if not self._current_library_id:
             self.model.set_tracks([])
             self.editor.clear()
             self._update_album_filter_ui()
+            self._library_label = ""
+            self._total_tracks = 0
+            self._update_status()
             if hasattr(self, "album_model"):
                 self.album_model.set_albums([])
+            self._albums_dirty = False
             return
         tracks = self.db.list_tracks(
             library_id=self._current_library_id,
@@ -516,8 +599,15 @@ class MainWindow(QMainWindow):
         if self.missing_artwork_button.isChecked():
             tracks = [track for track in tracks if not self._track_has_artwork(track)]
         self.model.set_tracks(tracks)
+        library = self.db.get_library(self._current_library_id)
+        self._library_label = library.name if library else "Library"
+        self._total_tracks = len(tracks)
         self._update_album_filter_ui()
-        self.refresh_albums()
+        self._update_status()
+        if self.tabs.currentIndex() == 1:
+            self.refresh_albums()
+        else:
+            self._albums_dirty = True
         if not self.selected_track_ids():
             self.editor.clear()
 
@@ -535,6 +625,7 @@ class MainWindow(QMainWindow):
             descending=self._album_sort_desc,
         )
         self.album_model.set_albums(albums)
+        self._albums_dirty = False
 
     def _tab_changed(self, index: int) -> None:
         if hasattr(self, "tracks_view_action"):
@@ -546,6 +637,7 @@ class MainWindow(QMainWindow):
         if index == 1:
             self.refresh_albums()
         self._selection_changed()
+        self._update_status()
 
     def _update_album_grid(self, width: int | None = None) -> None:
         if not hasattr(self, "album_view"):
@@ -643,12 +735,12 @@ class MainWindow(QMainWindow):
             selection = self.album_view.selectionModel()
             if selection is None:
                 return []
-            ids: list[str] = []
+            album_ids: list[str] = []
             for index in selection.selectedIndexes():
                 album = self.album_model.album_at(index.row())
-                if album is not None:
-                    ids.extend(self.db.track_ids_for_album(album.id, self._current_library_id))
-            return list(dict.fromkeys(ids))
+                if album is not None and album.id not in album_ids:
+                    album_ids.append(album.id)
+            return self.db.track_ids_for_albums(album_ids, self._current_library_id)
         selection = self.table.selectionModel()
         if selection is None:
             return []
@@ -736,14 +828,25 @@ class MainWindow(QMainWindow):
         QProcess.startDetached("open", ["-R", track.path])
 
     def _selection_changed(self, *_args: object) -> None:
+        self._update_status()
+        if self.tabs.currentIndex() == 1 and self._selection_item_count() > 0:
+            self._selection_timer.start()
+            return
+        self._selection_timer.stop()
+        self._apply_selection()
+
+    def _apply_selection(self) -> None:
         ids = self.selected_track_ids()
         if not ids:
             self.editor.clear()
+            self._update_status()
             return
-        tracks = [track for song_id in ids if (track := self.db.get_track(song_id))]
-        tags_list = [tags for song_id in ids if (tags := self.db.load_tag_set(song_id))]
+        tracks = self.db.get_tracks_by_ids(ids)
+        tags_by_id = self.db.load_tag_sets(ids)
+        tags_list = [tags_by_id[song_id] for song_id in ids if song_id in tags_by_id]
         if not tracks or len(tracks) != len(tags_list):
             self.editor.clear()
+            self._update_status()
             return
         if len(tracks) == 1:
             self.editor.load_track(tracks[0], tags_list[0])
@@ -752,8 +855,9 @@ class MainWindow(QMainWindow):
             self.editor.load_multi(tracks, tags_list)
             pixmap, info = self._common_artwork(tracks)
         self.editor.set_artwork(pixmap, info)
+        self._update_status()
 
-    def _front_artwork(self, track: Track) -> tuple[bytes, str] | None:
+    def _front_artwork(self, track: Track) -> tuple[bytes, str, int] | None:
         if not track.has_artwork:
             return None
         try:
@@ -763,15 +867,21 @@ class MainWindow(QMainWindow):
         if not artworks:
             return None
         artwork = artworks[0]
-        return artwork.data, f"{artwork.width}x{artwork.height} · {artwork.mime}"
+        return (
+            artwork.data,
+            f"{artwork.width}x{artwork.height} · {artwork.mime}",
+            len(artworks),
+        )
 
     def _artwork_for_track(self, track: Track) -> tuple[QPixmap, str]:
         artwork = self._front_artwork(track)
         if artwork is None:
             return QPixmap(), "No artwork"
-        data, info = artwork
+        data, info, count = artwork
         pixmap = QPixmap()
         if pixmap.loadFromData(data):
+            if count > 1:
+                info = f"{info} · {count} artworks"
             return pixmap, info
         return QPixmap(), "No artwork"
 
@@ -808,21 +918,34 @@ class MainWindow(QMainWindow):
         ids = self.selected_track_ids()
         if not ids:
             return
+        art_data = self.editor.pending_artwork_data()
+        art_remove = self.editor.pending_artwork_removal()
         changes = self.service.preview_tag_edits(ids, edits)
-        if not any(change.changed_fields for change in changes):
+        tag_changes = any(change.changed_fields for change in changes)
+        if not tag_changes and art_data is None and not art_remove:
             QMessageBox.information(self, "No changes", "The selected fields are unchanged.")
             return
-        preview = TagPreviewDialog(changes, self)
-        if preview.exec() != QDialog.DialogCode.Accepted:
-            return
-        song_id = ids[0]
-        result = self.service.update_tags(ids, edits)
+        if tag_changes:
+            preview = TagPreviewDialog(changes, self)
+            if preview.exec() != QDialog.DialogCode.Accepted:
+                return
+        art_errors: list[str] = []
+        if art_data is not None:
+            art_errors = self.service.set_artwork(ids, art_data)
+        elif art_remove:
+            art_errors = self.service.remove_artwork(ids)
+        result = self.service.update_tags(ids, edits) if tag_changes else None
+        song_id = result.updated[0].id if result is not None and result.updated else ids[0]
         self.refresh_libraries()
         self.refresh_tracks()
         if self.tabs.currentIndex() == 0:
             self._select_song(song_id)
-        if result.errors:
+        else:
+            self._apply_selection()
+        if result is not None and result.errors:
             QMessageBox.warning(self, "Tag update warnings", "\n".join(result.errors[:10]))
+        if art_errors:
+            QMessageBox.warning(self, "Artwork warnings", "\n".join(art_errors[:10]))
 
     def edit_tags(self) -> None:
         ids = self._require_selection()
@@ -838,8 +961,8 @@ class MainWindow(QMainWindow):
             return
         if TagPreviewDialog(changes, self).exec() != QDialog.DialogCode.Accepted:
             return
-        first = ids[0]
         result = self.service.update_tags(ids, edits)
+        first = result.updated[0].id if result.updated else ids[0]
         self.refresh_libraries()
         self.refresh_tracks()
         self._select_song(first)
@@ -862,8 +985,8 @@ class MainWindow(QMainWindow):
             return
         if TagPreviewDialog(changes, self).exec() != QDialog.DialogCode.Accepted:
             return
-        first = ids[0]
         result = self.service.auto_number_tracks(ids, per_disc=per_disc, start=start)
+        first = result.updated[0].id if result.updated else ids[0]
         self.refresh_libraries()
         self.refresh_tracks()
         self._select_song(first)
@@ -975,26 +1098,36 @@ class MainWindow(QMainWindow):
             if result.errors:
                 QMessageBox.warning(self, "Duplicate removal", "\n".join(result.errors[:10]))
 
-    def set_cover(self) -> None:
-        ids = self._require_selection()
-        if ids is None:
-            return
+    def _pick_cover_data(self) -> bytes | None:
         filename, _ = QFileDialog.getOpenFileName(
             self, "Choose Cover Image", str(Path.home()), "Images (*.jpg *.jpeg *.png)"
         )
         if not filename:
-            return
+            return None
         try:
-            data = Path(filename).read_bytes()
+            return Path(filename).read_bytes()
         except OSError as exc:
             QMessageBox.critical(self, "Cover", str(exc))
+            return None
+
+    def stage_cover(self) -> None:
+        data = self._pick_cover_data()
+        if data is not None:
+            self.editor.set_pending_artwork(data)
+
+    def set_cover(self) -> None:
+        ids = self._require_selection()
+        if ids is None:
+            return
+        data = self._pick_cover_data()
+        if data is None:
             return
         first = ids[0]
         errors = self.service.set_artwork(ids, data)
         self.refresh_tracks()
         self._select_song(first)
         if errors:
-            QMessageBox.warning(self, "Cover warnings", "\n".join(errors[:10]))
+            QMessageBox.warning(self, "Artwork warnings", "\n".join(errors[:10]))
 
     def remove_cover(self) -> None:
         ids = self._require_selection()
@@ -1053,20 +1186,51 @@ class MainWindow(QMainWindow):
             self.visible_columns(),
             album_sort=self._album_sort,
             album_order="desc" if self._album_sort_desc else "asc",
+            status_bar_visible=self._status_bar_visible,
+            strong_order=self.service.strong_order,
+            preserve_mtime=self.service.preserve_mtime,
+            artwork_max_size=self.service.artwork_max_size,
+            artwork_quality=self.service.artwork_quality,
+            artwork_crop_square=self.service.artwork_crop_square,
             selection_available=bool(self.selected_track_ids()),
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        template, visible, album_sort, album_order = dialog.values()
+        (
+            template,
+            visible,
+            album_sort,
+            album_order,
+            status_bar_visible,
+            strong_order,
+            preserve_mtime,
+            artwork_max_size,
+            artwork_quality,
+            artwork_crop_square,
+        ) = dialog.values()
         self.db.set_setting("default_template", template)
         self.db.set_setting("album_sort_field", album_sort)
         self.db.set_setting("album_sort_order", album_order)
+        self.db.set_setting("status_bar_visible", "1" if status_bar_visible else "0")
+        self.db.set_setting("strong_order", "1" if strong_order else "0")
+        self.db.set_setting("preserve_mtime", "1" if preserve_mtime else "0")
+        self.db.set_setting("artwork_max_size", str(artwork_max_size))
+        self.db.set_setting("artwork_quality", str(artwork_quality))
+        self.db.set_setting("artwork_crop_square", "1" if artwork_crop_square else "0")
         self.service.default_template = template
+        self.service.strong_order = strong_order
+        self.service.preserve_mtime = preserve_mtime
+        self.service.artwork_max_size = artwork_max_size
+        self.service.artwork_quality = artwork_quality
+        self.service.artwork_crop_square = artwork_crop_square
         self._album_sort = album_sort
         self._album_sort_desc = album_order != "asc"
+        self._status_bar_visible = status_bar_visible
+        self.statusBar().setVisible(status_bar_visible)
         self.set_visible_columns(visible)
         self.refresh_albums()
+        self._update_status()
         actions = {
             "manage_libraries": self.open_library_manager,
             "find_duplicates": self.find_duplicates,
