@@ -176,10 +176,10 @@ class TagSet:
     genres: list[str] = field(default_factory=list)
     year: str = ""
     original_date: str = ""
-    track: int = 0
-    track_total: int = 0
-    disc: int = 0
-    disc_total: int = 0
+    track: str = ""
+    track_total: str = ""
+    disc: str = ""
+    disc_total: str = ""
     comment: str = ""
     composer: str = ""
     lyricist: str = ""
@@ -267,21 +267,21 @@ def _values(value: Any) -> list[str]:
     return [text] if text else []
 
 
-def _pair(value: Any) -> tuple[int, int]:
+def _pair(value: Any) -> tuple[str, str]:
     text = _clean(value)
     if not text:
-        return 0, 0
+        return "", ""
     first, _, second = text.partition("/")
-    try:
-        number = int("".join(ch for ch in first if ch.isdigit()) or 0)
-        total = int("".join(ch for ch in second if ch.isdigit()) or 0)
-    except ValueError:
-        return 0, 0
-    return number, total
+    return first.strip(), second.strip()
 
 
-def _natural(value: Any) -> int:
-    return int("".join(ch for ch in _clean(value) if ch.isdigit()) or 0)
+def _natural(value: Any) -> str:
+    return _clean(value)
+
+
+def _int_value(value: object) -> int:
+    text = _clean(value)
+    return int(text) if text.isdigit() else 0
 
 
 def _artwork_meta(
@@ -500,13 +500,13 @@ def _read_mp4(audio: Any) -> TagSet:
     trkn = value("trkn") or []
     if trkn:
         pair = trkn[0]
-        result.track = int(pair[0])
-        result.track_total = int(pair[1])
+        result.track = str(pair[0]) if pair[0] else ""
+        result.track_total = str(pair[1]) if pair[1] else ""
     disk = value("disk") or []
     if disk:
         pair = disk[0]
-        result.disc = int(pair[0])
-        result.disc_total = int(pair[1])
+        result.disc = str(pair[0]) if pair[0] else ""
+        result.disc_total = str(pair[1]) if pair[1] else ""
     result.comment = first("\xa9cmt")
     result.composer = first("\xa9wrt")
     result.lyrics = first("\xa9lyr")
@@ -776,7 +776,7 @@ def apply_tag_edits(tags: TagSet, edits: Mapping[str, object]) -> TagSet:
         if field_name in {"artists", "genres"}:
             setattr(updated, field_name, _tag_values(value))
         elif field_name in {"track", "track_total", "disc", "disc_total"}:
-            setattr(updated, field_name, int(value or 0))  # type: ignore[arg-type]
+            setattr(updated, field_name, _clean(value))
         elif field_name == "compilation":
             setattr(updated, field_name, bool(value))
         else:
@@ -862,28 +862,26 @@ def _set_vorbis(audio: Any, edits: Mapping[str, object]) -> None:
         else:
             _vc_delete(tags, "GENRE")
     if "track" in edits or "track_total" in edits:
-        track = int(edits.get("track", 0) or 0)
-        total = int(edits.get("track_total", 0) or 0)
-        if track or total:
-            tags["TRACKNUMBER"] = [str(track)]
-            if total:
-                tags["TRACKTOTAL"] = [str(total)]
-            else:
-                _vc_delete(tags, "TRACKTOTAL")
+        track = _clean(edits.get("track", ""))
+        total = _clean(edits.get("track_total", ""))
+        if track:
+            tags["TRACKNUMBER"] = [track]
         else:
             _vc_delete(tags, "TRACKNUMBER")
+        if total:
+            tags["TRACKTOTAL"] = [total]
+        else:
             _vc_delete(tags, "TRACKTOTAL")
     if "disc" in edits or "disc_total" in edits:
-        disc = int(edits.get("disc", 0) or 0)
-        total = int(edits.get("disc_total", 0) or 0)
-        if disc or total:
-            tags["DISCNUMBER"] = [str(disc)]
-            if total:
-                tags["DISCTOTAL"] = [str(total)]
-            else:
-                _vc_delete(tags, "DISCTOTAL")
+        disc = _clean(edits.get("disc", ""))
+        total = _clean(edits.get("disc_total", ""))
+        if disc:
+            tags["DISCNUMBER"] = [disc]
         else:
             _vc_delete(tags, "DISCNUMBER")
+        if total:
+            tags["DISCTOTAL"] = [total]
+        else:
             _vc_delete(tags, "DISCTOTAL")
     if "compilation" in edits:
         tags["COMPILATION"] = ["1" if edits["compilation"] else "0"]
@@ -974,17 +972,17 @@ def _set_id3(audio: Any, edits: Mapping[str, object]) -> None:
             tags.add(USLT(encoding=3, lang="eng", desc="", text=value))
     if "track" in edits or "track_total" in edits:
         tags.delall("TRCK")
-        track = int(edits.get("track", 0) or 0)
-        total = int(edits.get("track_total", 0) or 0)
+        track = _clean(edits.get("track", ""))
+        total = _clean(edits.get("track_total", ""))
         if track or total:
-            text = f"{track}/{total}" if total else str(track)
+            text = f"{track or '0'}/{total}" if total else track
             tags.add(TRCK(encoding=3, text=[text]))
     if "disc" in edits or "disc_total" in edits:
         tags.delall("TPOS")
-        disc = int(edits.get("disc", 0) or 0)
-        total = int(edits.get("disc_total", 0) or 0)
+        disc = _clean(edits.get("disc", ""))
+        total = _clean(edits.get("disc_total", ""))
         if disc or total:
-            text = f"{disc}/{total}" if total else str(disc)
+            text = f"{disc or '0'}/{total}" if total else disc
             tags.add(TPOS(encoding=3, text=[text]))
     if "compilation" in edits:
         tags.delall("TCMP")
@@ -1068,15 +1066,15 @@ def _set_mp4(audio: Any, edits: Mapping[str, object]) -> None:
         else:
             tags.pop("\xa9gen", None)
     if "track" in edits or "track_total" in edits:
-        track = int(edits.get("track", 0) or 0)
-        total = int(edits.get("track_total", 0) or 0)
+        track = _int_value(edits.get("track", ""))
+        total = _int_value(edits.get("track_total", ""))
         if track or total:
             tags["trkn"] = [(track, total)]
         else:
             tags.pop("trkn", None)
     if "disc" in edits or "disc_total" in edits:
-        disc = int(edits.get("disc", 0) or 0)
-        total = int(edits.get("disc_total", 0) or 0)
+        disc = _int_value(edits.get("disc", ""))
+        total = _int_value(edits.get("disc_total", ""))
         if disc or total:
             tags["disk"] = [(disc, total)]
         else:
@@ -1162,17 +1160,17 @@ def _set_ape(audio: Any, edits: Mapping[str, object]) -> None:
         else:
             tags.pop("Genre", None)
     if "track" in edits or "track_total" in edits:
-        track = int(edits.get("track", 0) or 0)
-        total = int(edits.get("track_total", 0) or 0)
+        track = _clean(edits.get("track", ""))
+        total = _clean(edits.get("track_total", ""))
         if track or total:
-            tags["Track"] = f"{track}/{total}" if total else str(track)
+            tags["Track"] = f"{track or '0'}/{total}" if total else track
         else:
             tags.pop("Track", None)
     if "disc" in edits or "disc_total" in edits:
-        disc = int(edits.get("disc", 0) or 0)
-        total = int(edits.get("disc_total", 0) or 0)
+        disc = _clean(edits.get("disc", ""))
+        total = _clean(edits.get("disc_total", ""))
         if disc or total:
-            tags["Disc"] = f"{disc}/{total}" if total else str(disc)
+            tags["Disc"] = f"{disc or '0'}/{total}" if total else disc
         else:
             tags.pop("Disc", None)
     if "compilation" in edits:

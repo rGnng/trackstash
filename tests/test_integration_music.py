@@ -50,7 +50,7 @@ def test_real_music_import_edit_organize_and_cleanup(tmp_path: Path) -> None:
     library_root = tmp_path / "Managed"
     library_root.mkdir()
     database = Database(tmp_path / "library.sqlite")
-    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    service = LibraryService(database)
     library = database.add_library(library_root, name="Integration")
     plan = service.plan_import(sources, library.id)
     result = service.execute_import(plan)
@@ -95,7 +95,7 @@ def test_real_m4a_roundtrip_if_available(tmp_path: Path) -> None:
     library_root = tmp_path / "Managed"
     library_root.mkdir()
     database = Database(tmp_path / "library.sqlite")
-    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    service = LibraryService(database)
     library = database.add_library(library_root, name="M4A")
     plan = service.plan_import([path], library.id)
     result = service.execute_import(plan)

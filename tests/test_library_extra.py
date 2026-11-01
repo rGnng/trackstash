@@ -31,7 +31,7 @@ def setup(tmp_path: Path, audio_factory: Path) -> tuple[Database, LibraryService
         },
     )
     database = Database(tmp_path / "library.sqlite")
-    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    service = LibraryService(database)
     library = database.add_library(root, name="Lifecycle")
     plan = service.plan_import([incoming], library.id)
     service.execute_import(plan)
@@ -108,7 +108,7 @@ def test_redo_tag_and_organize(setup: tuple) -> None:
     assert read_metadata(database.get_track(plan[0].new_id).path).tags.title == "Redone Title"
 
 
-def test_artwork_embed_cache_extract_remove(setup: tuple, tmp_path: Path) -> None:
+def test_artwork_embed_extract_remove(setup: tuple, tmp_path: Path) -> None:
     from io import BytesIO
 
     from PIL import Image
@@ -121,8 +121,9 @@ def test_artwork_embed_cache_extract_remove(setup: tuple, tmp_path: Path) -> Non
     assert errors == []
     refreshed = database.get_track(track.id)
     assert refreshed is not None
-    cache = service.artwork_dir / f"{refreshed.album_id.upper()}.jpg"
-    assert cache.is_file()
+    assert refreshed.has_artwork is True
+    assert refreshed.artwork_checksum
+    assert not (tmp_path / "Artwork").exists()
 
     extracted = service.extract_artwork(track.id, tmp_path / "extracted.jpg")
     assert extracted.is_file()
@@ -131,6 +132,10 @@ def test_artwork_embed_cache_extract_remove(setup: tuple, tmp_path: Path) -> Non
     errors = service.remove_artwork([track.id])
     assert errors == []
     assert database.load_tag_set(track.id) is not None
+    removed = database.get_track(track.id)
+    assert removed is not None
+    assert removed.has_artwork is False
+    assert removed.artwork_checksum == ""
 
 
 def test_rekey_changes_song_ids_and_backs_up(setup: tuple) -> None:
@@ -193,13 +198,18 @@ def test_auto_number_per_disc_and_undo(setup: tuple, tmp_path: Path, audio_facto
         (track.disc, track.track, track.track_total)
         for track in service.db.list_tracks(library_id=library.id)
     )
-    assert numbered == [(1, 1, 2), (1, 2, 2), (2, 1, 2), (2, 2, 2)]
+    assert numbered == [
+        ("1", "1", "2"),
+        ("1", "2", "2"),
+        ("2", "1", "2"),
+        ("2", "2", "2"),
+    ]
     undone = service.undo_last()
     assert undone is not None and undone.undone == 4
     restored = sorted(
         (track.disc, track.track) for track in service.db.list_tracks(library_id=library.id)
     )
-    assert restored == [(1, 7), (1, 8), (2, 7), (2, 8)]
+    assert restored == [("1", "7"), ("1", "8"), ("2", "7"), ("2", "8")]
 
 
 def test_relocate_library_preserves_track_ids(setup: tuple, tmp_path: Path) -> None:

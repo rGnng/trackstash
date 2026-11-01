@@ -17,7 +17,7 @@ from trackstash.core.metadata import read_metadata, write_tags
 @pytest.fixture()
 def service(tmp_path: Path) -> LibraryService:
     database = Database(tmp_path / "library.sqlite")
-    return LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    return LibraryService(database)
 
 
 @pytest.fixture()
@@ -78,6 +78,42 @@ def test_schema_migrates_bitrate_to_kbps(populated: tuple) -> None:
     tracks = reopened.list_tracks(library_id=library.id)
     assert tracks
     assert all(0 < track.bitrate < 20000 for track in tracks)
+
+
+def test_album_list_sorting(service: LibraryService, tmp_path: Path, audio_factory: Path) -> None:
+    root = tmp_path / "Sorted Library"
+    root.mkdir()
+    library = service.db.add_library(root, name="Sorted")
+    for index, album_title in enumerate(("Alpha", "Zulu")):
+        incoming = tmp_path / f"Sort Incoming {index}"
+        incoming.mkdir()
+        source = incoming / f"sort-{index}.flac"
+        shutil.copy2(audio_factory / "sample.flac", source)
+        write_tags(
+            source,
+            {
+                "title": f"{album_title} Song",
+                "artists": ["Sort Artist"],
+                "album": album_title,
+                "album_artist": "Sort Artist",
+                "track": 1,
+            },
+        )
+        service.execute_import(service.plan_import([incoming], library.id))
+    with service.db.transaction() as connection:
+        connection.execute(
+            "UPDATE songs SET date_added = 200 WHERE album_id ="
+            " (SELECT id FROM albums WHERE title = 'Zulu')"
+        )
+        connection.execute(
+            "UPDATE songs SET date_added = 100 WHERE album_id ="
+            " (SELECT id FROM albums WHERE title = 'Alpha')"
+        )
+
+    by_date = service.db.list_albums(library.id, sort="date_added", descending=True)
+    assert [album.title for album in by_date] == ["Zulu", "Alpha"]
+    by_title = service.db.list_albums(library.id, sort="title", descending=False)
+    assert [album.title for album in by_title] == ["Alpha", "Zulu"]
 
 
 def test_duplicate_import_skip(service: LibraryService, populated: tuple) -> None:
@@ -225,7 +261,7 @@ def test_duplicate_import_skip_by_hash(
     assert service.db.track_count(library.id) == 1
 
 
-def test_multi_disc_import_uses_disc_folders(
+def test_multi_disc_import_prefixes_disc_numbers(
     service: LibraryService, tmp_path: Path, audio_factory: Path
 ) -> None:
     root = tmp_path / "MultiDisc"
@@ -252,7 +288,11 @@ def test_multi_disc_import_uses_disc_folders(
     plan = service.plan_import([incoming], library.id)
     result = service.execute_import(plan)
     assert len(result.imported) == 2
-    paths = sorted(track.path for track in result.imported)
-    assert any("Disc 1" in path for path in paths)
-    assert any("Disc 2" in path for path in paths)
+    paths = sorted(Path(track.path) for track in result.imported)
     assert len(set(paths)) == 2
+    assert len({path.parent for path in paths}) == 1
+    assert not any("Disc 1" in str(path) or "Disc 2" in str(path) for path in paths)
+    assert [path.name for path in paths] == [
+        "01-01 Same Song.flac",
+        "02-01 Same Song.flac",
+    ]

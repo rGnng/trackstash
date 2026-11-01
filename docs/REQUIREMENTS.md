@@ -230,7 +230,7 @@ Priorities: **P0** = required for v1, **P1** = expected for v1, **P2** = later.
 | ART-02 | P0 | The user MUST be able to add, replace, and remove front-cover artwork for a selection. |
 | ART-03 | P1 | Multiple artwork types (front, back, booklet, artist) SHOULD be manageable where the format supports them. |
 | ART-04 | P1 | The application SHOULD support assigning a folder image to all tracks in that folder. |
-| ART-05 | P1 | The application SHOULD resize and convert artwork (JPEG/PNG) with configurable maximum dimensions. |
+| ART-05 | P1 | The application MUST NOT create a disk cover cache; artwork is read from embedded tags on demand for visible albums and cached only in memory. |
 | ART-06 | P1 | Duplicate artwork SHOULD be detected by checksum. |
 | ART-07 | P1 | `cover.jpg`/`folder.jpg` sidecar files SHOULD be discoverable, with a per-library policy for embedding. |
 
@@ -307,7 +307,7 @@ refactoring. Priorities below are relative to the post-v1 phase.
 
 | ID | Priority | Requirement |
 |---|---|---|
-| SET-01 | P0 | Settings MUST cover database location, backup retention, default ID3 version, artwork limits, import template defaults, automatic organization, and default deletion behavior. |
+| SET-01 | P0 | Settings MUST cover database location, backup retention, default ID3 version, import template defaults, album grid sorting, automatic organization, and default deletion behavior. |
 | SET-02 | P1 | The database MUST be backed up and restorable from the application. |
 | SET-03 | P1 | The user SHOULD be able to export and import settings. |
 | SET-04 | P1 | A diagnostics bundle (logs, versions, database statistics; no personal metadata) SHOULD be exportable. |
@@ -347,8 +347,8 @@ refactoring. Priorities below are relative to the post-v1 phase.
 | UPD-06 | P0 | If a file changed on disk since indexing, the update MUST warn and re-read the current tags before overwriting them. |
 | UPD-07 | P0 | Missing files MUST be reviewed; only explicitly selected rows are removed, and a scan MUST NOT delete files. |
 | UPD-08 | P0 | Batch updates MUST be cancellable; completed files remain journaled and undoable. |
-| UPD-09 | P1 | ReKey MUST recompute the namespace and all core IDs, remap references, rename the artwork cache, and back up the database before writing. |
-| UPD-10 | P1 | When an artist or album identity changes into an existing row, the rows MUST merge deterministically: the existing row wins, songs are reassigned, and orphan rows and cache entries are cleaned up. |
+| UPD-09 | P1 | ReKey MUST recompute the namespace and all core IDs, remap references, and back up the database before writing. |
+| UPD-10 | P1 | When an artist or album identity changes into an existing row, the rows MUST merge deterministically: the existing row wins, songs are reassigned, and orphan albums, artists, and `ts_artwork` rows are cleaned up. |
 
 #### Deletion
 
@@ -359,7 +359,7 @@ refactoring. Priorities below are relative to the post-v1 phase.
 | DEL-03 | P0 | File deletion via the system Trash is NOT undoable within the application and the confirmation MUST state this. Index-only deletion MUST be undoable. |
 | DEL-04 | P0 | The deletion preview MUST list affected tracks, file sizes, and whether files will be trashed. |
 | DEL-05 | P0 | Deleting a library MUST remove only its index rows; files are never touched. |
-| DEL-06 | P1 | Orphan albums, artists, and artwork cache entries SHOULD be cleaned up after index deletion. |
+| DEL-06 | P1 | Orphan albums, artists, and `ts_artwork` rows SHOULD be cleaned up after index deletion. |
 | DEL-07 | P1 | Deleting a track MUST update or remove references in the same transaction. |
 | DEL-08 | P2 | A bulk removal of missing files MAY be offered after a Full Scan, with the same preview and confirmation rules. |
 
@@ -415,8 +415,8 @@ Tracks-compatible base tables:
 
 - **libraries** — id, path, kind, name, identifier, id_namespace, date_added, enabled.
 - **artists** — id, name.
-- **albums** — id, title, artist_id, genre, year, artwork (always `NULL`; artwork is cached on disk).
-- **songs** — id, path, library_id, title, artist_id, album_id, genre, year, track, track_total, disc, disc_total, comments, duration, date_added, play_count, rating, loved, last_played, skip_count, mtime, file_size.
+- **albums** — id, title, artist_id, genre, year, artwork (always `NULL`; no disk cover cache).
+- **songs** — id, path, library_id, title, artist_id, album_id, genre, year, track, track_total, disc, disc_total, comments, duration, date_added, play_count, rating, loved, last_played, skip_count, mtime, file_size. Track and disc fields use TEXT affinity because tags are text.
 
 TrackStash extension tables:
 
@@ -424,14 +424,14 @@ TrackStash extension tables:
 - **ts_audio_properties** — song id, format, codec, bitrate, sample rate, channels, bit depth, and lossless flag.
 - **ts_file_state** — song id, content hash, hash state, last scan time, scan error, and offline flag.
 - **ts_tag_value** — song id, field key, position, value; multi-value fields and unknown/custom tags.
-- **ts_artwork** — song id, artwork type, MIME type, dimensions, checksum, storage, cache path; per-track embedded artwork metadata.
+- **ts_artwork** — song id, artwork type, MIME type, dimensions, and checksum; per-track embedded artwork metadata. Artwork is not cached on disk; `cache_path` is a legacy unused column.
 - **ts_operations** / **ts_operation_items** — journal; prior state includes tags, artwork, path, names, and namespace needed to reverse a remap.
 - **ts_track_fts** — FTS5 index over searchable text.
 - **ts_saved_views**, **ts_presets**, **ts_settings** — user configuration.
 
-Artwork is cached as `<ALBUM-UUID>.jpg` under
-`~/Library/Application Support/TrackStash/Artwork/`; `albums.artwork` remains
-`NULL` for Tracks compatibility.
+Artwork is read from embedded tags on demand for visible albums and cached only
+in memory for the current session; `albums.artwork` remains `NULL` for Tracks
+compatibility. No cover files are written to disk.
 
 `songs.id` is the primary key and changes when the library-relative path
 changes. `libraries.path` and `songs.path` are canonical and unique. The operation
@@ -445,7 +445,9 @@ Title, artists (multi-value), album artist, album, track number, track total,
 disc number, disc total, year, original date, genre (multi-value), composer,
 lyricist, comment, lyrics, ISRC, BPM, musical key, compilation flag, sort title,
 sort artist, sort album artist, sort album, MusicBrainz recording/release/artist
-IDs, and artwork references. Format-specific mappings are defined per codec.
+IDs, and artwork references. Track, track total, disc, and disc total are stored
+as text, so values such as `A1` or `Side A` survive where the container supports
+text numbers. Format-specific mappings are defined per codec.
 
 Optional extended fields are mapped where the container supports them and are
 hidden or disabled otherwise: label, catalog number, barcode, release country,
@@ -462,7 +464,7 @@ segments. Tokens resolve from the edited metadata, not only the on-disk state.
 Unknown tokens are rejected during validation.
 
 The default import and organization template is
-`{album_artist}/{album}/{disc_dir}{track:02} {title}` (D-18). `{disc_dir}` expands to `Disc N/` only for multi-disc albums, so single-disc paths stay flat. It is configurable per library
+`{album_artist}/{album}/{disc_prefix}{track:02} {title}` (D-18). `{disc_prefix}` expands to `01-` only for multi-disc albums, so disc numbers prefix the track filename instead of creating folders. `{disc_dir}` remains available for templates that prefer a `Disc N/` folder. It is configurable per library
 and editable in the import wizard.
 
 ### 7.4 Tracks-compatible identity
@@ -488,7 +490,7 @@ so it recomputes IDs and remaps references as defined below.
 - **ID-08** Song IDs MUST be recomputed whenever the library-relative path
   changes; every reference MUST be remapped in the same transaction.
 - **ID-09** Artist and album IDs MUST be recomputed when their name inputs
-  change; affected song rows and artwork cache names MUST be updated.
+  change; affected song rows MUST be updated.
 - **ID-10** Library IDs MUST be recomputed when the root path changes. Song IDs
   change only when their library-relative paths change.
 - **ID-11** The operation journal MUST record the prior path, names, and
@@ -496,8 +498,7 @@ so it recomputes IDs and remaps references as defined below.
 - **ID-12** Auxiliary entities (operations, saved views, presets) MUST use
   uppercase UUIDv4 values and are not part of the Tracks algorithm.
 - **ID-13** ReKey MUST recompute the namespace and all core IDs from current
-  paths, remap references, rename artwork, and back up the database before
-  writing.
+  paths, remap references, and back up the database before writing.
 - **ID-14** External links that embed an old UUID cannot be updated by the
   application. Old IDs are not retained after the operation journal is pruned,
   and the UI MUST warn that external links may break after a move.
@@ -544,16 +545,21 @@ Unsupported files are never modified.
 
 ## 9. UX outline
 
-- **Library selector:** a native dropdown controls the single current library; there is no aggregate All Tracks view.
-- **Right pane:** virtualized track table or album grid with search and filters.
-  Track columns can be reordered, auto-fitted, and shown/hidden; the layout is
-  persisted and configurable in Settings.
+- **Single library:** the active library is managed from Settings → Library and remembered between launches; there is no aggregate All Tracks view or library dropdown in the main window.
+- **Right pane:** virtualized track table or album grid with search, format, and
+  missing-artwork filters. Track columns can be reordered, auto-fitted, and
+  shown/hidden; the layout is persisted and configurable in Settings. Album
+  covers resize within fixed column/row gaps to fill the viewport. The album
+  grid sorts by date added descending by default; field and order are
+  configurable in Settings.
 - **Media editor (left):** artwork, editable canonical tags, pending-change
   highlighting, and a fixed Save/Revert row. Multi-selection shows shared values
   and italic `Multiple` placeholders for mixed fields. Save opens a diff preview
   before writing.
-- **Import:** a File → Import… action. Scans, adding libraries, relocation, and
-  ReKey live in the Library Manager window.
+- **Action bar:** no main menu bar. Import, undo/redo, refresh, format, artwork
+  filtering, view switching, and Settings live in the top bar.
+- **Import:** a top-bar Import… button. Scans, adding libraries, relocation, and
+  ReKey live in Settings → Library → Manage Libraries.
 - **Albums view:** multi-select with drag or ⌘-click for batch tag editing.
 - **Track context menu:** Edit Tags, Go to Album, Open, Open with, Delete, and
   Show in Finder.
@@ -633,10 +639,10 @@ TrackStash is a native desktop application built with Python 3.12+ and PySide6
   thread, and the model is updated in bounded batches on the main thread.
 - **Hashing:** `hashlib` SHA-256 over size plus partial head/tail hashing, with
   full hashing deferred until duplicate review or move detection requires it.
-- **Artwork:** Pillow handles resizing and JPEG/PNG conversion; `QImage` is used
-  only for display. Album artwork is cached as `<ALBUM-UUID>.jpg` under
-  `~/Library/Application Support/TrackStash/Artwork/`; `ts_artwork` tracks
-  per-track embedded artwork metadata, and `albums.artwork` stays `NULL`.
+- **Artwork:** embedded artwork is read from the selected album's first track
+  only when the album enters the viewport, then cached in memory with a bounded
+  LRU. No cover files are written to disk; `ts_artwork` tracks per-track embedded
+  artwork metadata and `albums.artwork` stays `NULL`.
 - **Safety:** the journal records prior tag state, artwork, paths, and IDs before
   any mutation. Imports, moves, organization, tag writes, and index deletions are
   journaled. Index-only deletes are undoable; files moved to the macOS Trash are
@@ -748,13 +754,13 @@ to be decided.
 | D-13 | Import model | **Managed library.** Copy is the default, move is optional, destinations are tag-driven, and only fields edited in the import wizard are written to files. |
 | D-14 | Deletion model | **Index-only by default.** Moving files to the macOS Trash is optional and explicitly irreversible inside the application. |
 | D-15 | Schema reuse | **Tracks-compatible `libraries`, `artists`, `albums`, and `songs` tables plus `ts_*` extension tables.** |
-| D-16 | Code reuse | **Port/borrow Tracks/WebTracks methods for compatibility** (identity, enumeration, quick/full scan, upsert, missing review, artwork cache); no runtime dependency on either project. |
+| D-16 | Code reuse | **Port/borrow Tracks/WebTracks methods for compatibility** (identity, enumeration, quick/full scan, upsert, missing review, on-demand artwork loading); no runtime dependency on either project. |
 | D-17 | Audio preview | **Not in v1.** No playback or preview is implemented; the decision can be revisited later. |
-| D-18 | Default import template | **`{album_artist}/{album}/{disc_dir}{track:02} {title}`**, where `{disc_dir}` adds `Disc N/` only for multi-disc albums. Configurable per library and editable in the import wizard. |
+| D-18 | Default import template | **`{album_artist}/{album}/{disc_prefix}{track:02} {title}`**, where `{disc_prefix}` adds `01-` before the track number only for multi-disc albums. Configurable per library and editable in the import wizard. |
 | D-19 | Default library location | **`~/Music/TrackStash`**, created on first run and changeable in settings. |
 | D-20 | Online metadata | **Not implemented.** TrackStash never performs online metadata lookup; tags come from files, imports, and user edits. |
 | D-21 | Playlist import | **Post-M0.** Importing playlists (M3U/M3U8/PLS and similar) is planned after M0 and is not part of the scaffold; milestone placement is TBD. |
-| D-22 | Library UI scope | **One current library at a time.** Multiple libraries may exist, but the main window shows a library selector and never aggregates tracks from multiple libraries. |
+| D-22 | Library UI scope | **One current library at a time.** Multiple libraries may exist, but the active library is chosen in Settings and the main window never aggregates tracks from multiple libraries. |
 
 ### 12.2 Open decisions
 
@@ -785,7 +791,7 @@ None. All decisions are resolved.
 | ID | Risk | Mitigation |
 |---|---|---|
 | R-01 | Mutagen preserves unknown fields inconsistently across containers. | Round-trip fixtures per format; low-level APIs for writes; snapshot original tags before every write; warn and offer a full-file backup when preservation is uncertain. |
-| R-02 | Artwork handling requires format-specific code. | A picture adapter per format with add, replace, and remove tests; artwork cache keyed by checksum. |
+| R-02 | Artwork handling requires format-specific code. | A picture adapter per format with add, replace, and remove tests; on-demand embedded artwork keyed by checksum. |
 | R-03 | Python and the GIL can slow scanning, and large libraries can overwhelm an in-memory table model. | Process-pool scanning, SQL-backed model with a bounded cache, FTS5 search, and benchmarks at the 200,000-track target. |
 | R-04 | GPL compliance and source publication. | Publish the corresponding source with every binary release; ship notices and license texts; run a dependency-license audit in CI. |
 | R-05 | External or network volumes may be slow or disappear during a scan. | Offline state, cancellable scans, bounded concurrency, and no automatic deletion. |

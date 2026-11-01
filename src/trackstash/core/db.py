@@ -26,7 +26,7 @@ from trackstash.core.identity import (
 )
 from trackstash.core.metadata import TagSet, TrackMetadata
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS libraries (
@@ -66,10 +66,10 @@ CREATE TABLE IF NOT EXISTS songs (
     album_id TEXT NOT NULL,
     genre TEXT NOT NULL DEFAULT '',
     year TEXT NOT NULL DEFAULT '',
-    track INTEGER NOT NULL DEFAULT 0,
-    track_total INTEGER NOT NULL DEFAULT 0,
-    disc INTEGER NOT NULL DEFAULT 0,
-    disc_total INTEGER NOT NULL DEFAULT 0,
+    track TEXT NOT NULL DEFAULT '',
+    track_total TEXT NOT NULL DEFAULT '',
+    disc TEXT NOT NULL DEFAULT '',
+    disc_total TEXT NOT NULL DEFAULT '',
     comments TEXT NOT NULL DEFAULT '',
     duration REAL NOT NULL DEFAULT 0,
     date_added REAL NOT NULL,
@@ -247,10 +247,10 @@ class Track:
     album: str
     genre: str
     year: str
-    track: int
-    track_total: int
-    disc: int
-    disc_total: int
+    track: str
+    track_total: str
+    disc: str
+    disc_total: str
     comment: str
     duration: float
     date_added: float
@@ -268,7 +268,8 @@ class Track:
     channels: int
     bit_depth: int
     lossless: bool
-    artwork_path: str | None
+    artwork_checksum: str
+    has_artwork: bool
     album_id: str
 
 
@@ -296,7 +297,8 @@ class AlbumRow:
     artist: str
     year: str
     track_count: int
-    artwork_path: str | None
+    artwork_song_path: str | None
+    artwork_checksum: str
 
 
 def _now() -> float:
@@ -327,10 +329,10 @@ def _row_to_track(row: sqlite3.Row) -> Track:
         album=row["album"],
         genre=row["genre"],
         year=row["year"],
-        track=int(row["track"]),
-        track_total=int(row["track_total"]),
-        disc=int(row["disc"]),
-        disc_total=int(row["disc_total"]),
+        track=str(row["track"] or ""),
+        track_total=str(row["track_total"] or ""),
+        disc=str(row["disc"] or ""),
+        disc_total=str(row["disc_total"] or ""),
         comment=row["comments"],
         duration=float(row["duration"]),
         date_added=float(row["date_added"]),
@@ -348,7 +350,8 @@ def _row_to_track(row: sqlite3.Row) -> Track:
         channels=int(row["channels"] or 0),
         bit_depth=int(row["bit_depth"] or 0),
         lossless=bool(row["lossless"]),
-        artwork_path=row["artwork_path"],
+        artwork_checksum=row["artwork_checksum"] or "",
+        has_artwork=bool(row["has_artwork"]),
         album_id=row["album_id"],
     )
 
@@ -396,9 +399,81 @@ class Database:
                     " SET bitrate = CAST(ROUND(bitrate / 1000.0) AS INTEGER)"
                     " WHERE bitrate > 20000"
                 )
+            connection.commit()
+            if 0 < current < 3:
+                self._migrate_songs_to_text(connection)
             if current < SCHEMA_VERSION:
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             connection.commit()
+
+    def _migrate_songs_to_text(self, connection: sqlite3.Connection) -> None:
+        """Rebuild songs so track/disc columns use TEXT affinity."""
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys=OFF")
+        try:
+            connection.execute("DROP TABLE IF EXISTS songs_text_migration")
+            connection.execute(
+                """
+                CREATE TABLE songs_text_migration (
+                    id TEXT PRIMARY KEY,
+                    path TEXT NOT NULL UNIQUE,
+                    library_id TEXT,
+                    title TEXT NOT NULL,
+                    artist_id TEXT NOT NULL,
+                    album_id TEXT NOT NULL,
+                    genre TEXT NOT NULL DEFAULT '',
+                    year TEXT NOT NULL DEFAULT '',
+                    track TEXT NOT NULL DEFAULT '',
+                    track_total TEXT NOT NULL DEFAULT '',
+                    disc TEXT NOT NULL DEFAULT '',
+                    disc_total TEXT NOT NULL DEFAULT '',
+                    comments TEXT NOT NULL DEFAULT '',
+                    duration REAL NOT NULL DEFAULT 0,
+                    date_added REAL NOT NULL,
+                    play_count INTEGER NOT NULL DEFAULT 0,
+                    rating INTEGER NOT NULL DEFAULT 0,
+                    loved INTEGER NOT NULL DEFAULT 0,
+                    last_played REAL,
+                    skip_count INTEGER NOT NULL DEFAULT 0,
+                    mtime REAL NOT NULL DEFAULT 0,
+                    file_size INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO songs_text_migration (
+                    id, path, library_id, title, artist_id, album_id, genre,
+                    year, track, track_total, disc, disc_total, comments,
+                    duration, date_added, play_count, rating, loved,
+                    last_played, skip_count, mtime, file_size
+                )
+                SELECT id, path, library_id, title, artist_id, album_id, genre,
+                       year,
+                       CASE WHEN track IS NULL OR track = 0
+                            THEN '' ELSE CAST(track AS TEXT) END,
+                       CASE WHEN track_total IS NULL OR track_total = 0
+                            THEN '' ELSE CAST(track_total AS TEXT) END,
+                       CASE WHEN disc IS NULL OR disc = 0
+                            THEN '' ELSE CAST(disc AS TEXT) END,
+                       CASE WHEN disc_total IS NULL OR disc_total = 0
+                            THEN '' ELSE CAST(disc_total AS TEXT) END,
+                       comments, duration, date_added, play_count, rating,
+                       loved, last_played, skip_count, mtime, file_size
+                FROM songs
+                """
+            )
+            connection.execute("DROP TABLE songs")
+            connection.execute("ALTER TABLE songs_text_migration RENAME TO songs")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_songs_album ON songs(album_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist_id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_songs_library ON songs(library_id)")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("PRAGMA foreign_keys=ON")
 
     # ------------------------------------------------------------------
     # Libraries
@@ -923,7 +998,8 @@ class Database:
                s.play_count, s.rating, s.loved, s.last_played, s.skip_count,
                s.mtime, s.file_size, p.format, p.codec, p.bitrate, p.sample_rate,
                p.channels, p.bit_depth, p.lossless,
-               a.cache_path AS artwork_path, s.album_id
+               a.checksum AS artwork_checksum,
+               a.id IS NOT NULL AS has_artwork, s.album_id
         FROM songs s
         JOIN artists ar ON ar.id = s.artist_id
         JOIN albums al ON al.id = s.album_id
@@ -964,7 +1040,12 @@ class Database:
         sql = self._TRACK_SELECT
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY al.title COLLATE NOCASE, s.disc, s.track, s.title COLLATE NOCASE"
+        sql += (
+            " ORDER BY al.title COLLATE NOCASE,"
+            " CAST(s.disc AS INTEGER), s.disc COLLATE NOCASE,"
+            " CAST(s.track AS INTEGER), s.track COLLATE NOCASE,"
+            " s.title COLLATE NOCASE"
+        )
         if limit is not None:
             sql += " LIMIT ? OFFSET ?"
             parameters.extend([limit, max(0, offset)])
@@ -989,7 +1070,14 @@ class Database:
             row = connection.execute(self._TRACK_SELECT + " WHERE s.id = ?", (song_id,)).fetchone()
         return _row_to_track(row) if row else None
 
-    def list_albums(self, library_id: str, query: str = "") -> list[AlbumRow]:
+    def list_albums(
+        self,
+        library_id: str,
+        query: str = "",
+        *,
+        sort: str = "date_added",
+        descending: bool = True,
+    ) -> list[AlbumRow]:
         """Return album summaries for the grid view, optionally filtered."""
         clauses = ["s.library_id = ?"]
         parameters: list[Any] = [library_id]
@@ -1000,15 +1088,19 @@ class Database:
         sql = (
             "SELECT al.id, al.title, ar.name AS artist, al.year,"
             " COUNT(s.id) AS track_count,"
-            " (SELECT a.cache_path FROM ts_artwork a"
+            " (SELECT s2.path FROM ts_artwork a"
             "  JOIN songs s2 ON s2.id = a.song_id"
             "  WHERE s2.album_id = al.id AND a.kind = 'front'"
-            "  AND a.cache_path != '' LIMIT 1) AS artwork_path"
+            "  LIMIT 1) AS artwork_song_path,"
+            " (SELECT a.checksum FROM ts_artwork a"
+            "  JOIN songs s2 ON s2.id = a.song_id"
+            "  WHERE s2.album_id = al.id AND a.kind = 'front'"
+            "  LIMIT 1) AS artwork_checksum"
             " FROM albums al"
             " JOIN artists ar ON ar.id = al.artist_id"
             " JOIN songs s ON s.album_id = al.id"
             " WHERE " + " AND ".join(clauses) + " GROUP BY al.id"
-            " ORDER BY al.title COLLATE NOCASE, ar.name COLLATE NOCASE"
+            " ORDER BY " + self._album_order_sql(sort, descending)
         )
         with self.connect() as connection:
             rows = connection.execute(sql, parameters).fetchall()
@@ -1019,10 +1111,24 @@ class Database:
                 artist=row["artist"],
                 year=row["year"],
                 track_count=int(row["track_count"]),
-                artwork_path=row["artwork_path"],
+                artwork_song_path=row["artwork_song_path"],
+                artwork_checksum=row["artwork_checksum"] or "",
             )
             for row in rows
         ]
+
+    @staticmethod
+    def _album_order_sql(sort: str, descending: bool) -> str:
+        order = "DESC" if descending else "ASC"
+        if sort == "title":
+            primary = "al.title COLLATE NOCASE"
+        elif sort == "artist":
+            primary = "ar.name COLLATE NOCASE"
+        elif sort == "year":
+            primary = "CAST(al.year AS INTEGER)"
+        else:
+            primary = "MIN(s.date_added)"
+        return f"{primary} {order}, al.title COLLATE NOCASE, ar.name COLLATE NOCASE"
 
     def get_tracks_by_ids(self, song_ids: Sequence[str]) -> list[Track]:
         if not song_ids:
@@ -1126,10 +1232,10 @@ class Database:
             title=row["title"],
             album=row["album"],
             year=row["year"],
-            track=int(row["track"]),
-            track_total=int(row["track_total"]),
-            disc=int(row["disc"]),
-            disc_total=int(row["disc_total"]),
+            track=str(row["track"] or ""),
+            track_total=str(row["track_total"] or ""),
+            disc=str(row["disc"] or ""),
+            disc_total=str(row["disc_total"] or ""),
             comment=row["comments"],
         )
         for key in (
@@ -1277,34 +1383,6 @@ class Database:
                 (content_hash,),
             ).fetchone()
         return _row_to_track(row) if row else None
-
-    def set_artwork_cache(self, song_id: str, cache_path: str) -> None:
-        with self.transaction() as connection:
-            existing = connection.execute(
-                "SELECT id FROM ts_artwork WHERE song_id = ? AND kind = 'front'"
-                " ORDER BY id LIMIT 1",
-                (song_id,),
-            ).fetchone()
-            if existing is not None:
-                connection.execute(
-                    "UPDATE ts_artwork SET cache_path = ? WHERE id = ?",
-                    (cache_path, existing["id"]),
-                )
-            elif cache_path:
-                connection.execute(
-                    "INSERT INTO ts_artwork(song_id, kind, cache_path) VALUES(?, 'front', ?)",
-                    (song_id, cache_path),
-                )
-
-    def artwork_path_for_album(self, album_id: str) -> str:
-        with self.connect() as connection:
-            row = connection.execute(
-                "SELECT cache_path FROM ts_artwork a JOIN songs s ON s.id = a.song_id"
-                " WHERE s.album_id = ? AND a.kind = 'front' AND a.cache_path != ''"
-                " ORDER BY a.id LIMIT 1",
-                (album_id,),
-            ).fetchone()
-        return str(row["cache_path"]) if row else ""
 
     def latest_undoable_operation(self) -> Operation | None:
         with self.connect() as connection:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from io import BytesIO
 from pathlib import Path
 
@@ -62,10 +63,10 @@ def test_metadata_round_trip(audio_factory: Path, extension: str) -> None:
     assert updated.tags.album == "Test Album"
     assert updated.tags.album_artist == "Artist One"
     assert updated.tags.genres == ["Rock", "Pop"]
-    assert updated.tags.track == 2
-    assert updated.tags.track_total == 9
-    assert updated.tags.disc == 1
-    assert updated.tags.disc_total == 2
+    assert updated.tags.track == "2"
+    assert updated.tags.track_total == "9"
+    assert updated.tags.disc == "1"
+    assert updated.tags.disc_total == "2"
     assert updated.tags.bpm == "128"
     assert updated.tags.musical_key == "Am"
 
@@ -87,6 +88,28 @@ def test_clearing_fields(audio_factory: Path, extension: str) -> None:
 
     assert cleared.tags.title == ""
     assert cleared.tags.artists == []
+
+
+@pytest.mark.parametrize("extension", ["flac", "mp3"])
+def test_text_track_and_disc_round_trip(
+    audio_factory: Path, tmp_path: Path, extension: str
+) -> None:
+    path = tmp_path / f"text-numbers.{extension}"
+    shutil.copy2(audio_factory / f"sample.{extension}", path)
+    updated = write_tags(
+        path,
+        {
+            "title": "Text Numbers",
+            "track": "A1",
+            "track_total": "Side A",
+            "disc": "B",
+            "disc_total": "2",
+        },
+    )
+    assert updated.tags.track == "A1"
+    assert updated.tags.track_total == "Side A"
+    assert updated.tags.disc == "B"
+    assert updated.tags.disc_total == "2"
 
 
 def test_supported_extensions_include_target_formats() -> None:

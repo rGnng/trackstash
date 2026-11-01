@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 from PySide6.QtCore import (
     QAbstractListModel,
     QAbstractTableModel,
@@ -12,6 +14,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 
 from trackstash.core.db import AlbumRow, Track
+from trackstash.core.metadata import read_artwork
 
 COLUMNS: tuple[tuple[str, str], ...] = (
     ("Title", "title"),
@@ -124,12 +127,15 @@ class TrackTableModel(QAbstractTableModel):
         return self._tracks
 
 
-def _sort_key(track: Track, field: str) -> str | float:
+def _sort_key(track: Track, field: str) -> str | float | tuple[int, str]:
     value = getattr(track, field)
-    if field in {"track", "disc", "bitrate", "duration", "year"}:
-        if field == "year":
-            return str(value)
+    if field in {"track", "disc"}:
+        text = str(value or "")
+        return (int(text) if text.isdigit() else 0, text)
+    if field in {"bitrate", "duration"}:
         return float(value or 0)
+    if field == "year":
+        return str(value)
     return str(value or "").casefold()
 
 
@@ -139,7 +145,8 @@ class AlbumGridModel(QAbstractListModel):
     def __init__(self, albums: list[AlbumRow] | None = None) -> None:
         super().__init__()
         self._albums = albums or []
-        self._icons: dict[str, QIcon] = {}
+        self._icons: OrderedDict[str, QIcon] = OrderedDict()
+        self._cover_size = 180
 
     def rowCount(self, parent: QModelIndex | QPersistentModelIndex | None = None) -> int:
         return 0 if parent is not None and parent.isValid() else len(self._albums)
@@ -165,8 +172,14 @@ class AlbumGridModel(QAbstractListModel):
     def set_albums(self, albums: list[AlbumRow]) -> None:
         self.beginResetModel()
         self._albums = albums
-        self._icons.clear()
         self.endResetModel()
+
+    def set_cover_size(self, size: int) -> None:
+        size = max(1, int(size))
+        if size == self._cover_size:
+            return
+        self._cover_size = size
+        self._icons.clear()
 
     def album_at(self, row: int) -> AlbumRow | None:
         if 0 <= row < len(self._albums):
@@ -174,30 +187,41 @@ class AlbumGridModel(QAbstractListModel):
         return None
 
     def _icon(self, album: AlbumRow) -> QIcon:
-        cached = self._icons.get(album.id)
+        key = f"{album.id}:{album.artwork_checksum}"
+        cached = self._icons.get(key)
         if cached is not None:
+            self._icons.move_to_end(key)
             return cached
-        pixmap = QPixmap(180, 180)
-        if album.artwork_path:
-            source = QPixmap(album.artwork_path)
-            if not source.isNull():
-                pixmap = source.scaled(
-                    180,
-                    180,
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-        if pixmap.isNull() or album.artwork_path is None:
-            pixmap = QPixmap(180, 180)
+        size = self._cover_size
+        pixmap: QPixmap | None = None
+        if album.artwork_song_path:
+            try:
+                artworks = read_artwork(album.artwork_song_path)
+            except Exception:
+                artworks = []
+            if artworks:
+                source = QPixmap()
+                if source.loadFromData(artworks[0].data) and not source.isNull():
+                    pixmap = source.scaled(
+                        size,
+                        size,
+                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+        if pixmap is None:
+            pixmap = QPixmap(size, size)
             color = QColor.fromHsv(abs(hash(album.id)) % 360, 90, 120)
             pixmap.fill(color)
             painter = QPainter(pixmap)
             painter.setPen(QColor("#F5F7FA"))
             font = painter.font()
-            font.setPointSize(42)
+            font.setPointSize(max(10, int(size * 0.23)))
             painter.setFont(font)
             painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "♪")
             painter.end()
         icon = QIcon(pixmap)
-        self._icons[album.id] = icon
+        self._icons[key] = icon
+        self._icons.move_to_end(key)
+        while len(self._icons) > 256:
+            self._icons.popitem(last=False)
         return icon

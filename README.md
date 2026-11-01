@@ -20,13 +20,16 @@ consistent without cloud dependencies.
 - **Track context menu.** Edit Tags, Go to Album, Open, Open with, Delete, and
   Show in Finder.
 - **Tracks and Albums views.** The app opens on the album grid; a compact
-  `View:` switch in the top bar toggles between Albums and Tracks. The track
+  `View` switch in the top bar toggles between Albums and Tracks. The track
   table is sortable with movable/resizable columns (`Title`, `Format`, `Codec`,
-  `Bitrate` in Kbps, and more); the album grid shows cover art. Double-click an
-  album to filter tracks; select multiple albums for batch editing.
-- **Consistent Qt interface.** The app uses Qt's Fusion style and an in-window
-  menu bar, so buttons, menus, and other controls share one appearance instead
-  of mixing native macOS and Qt-drawn widgets.
+  `Bitrate` in Kbps, and more). Album covers resize within a fixed-gap grid to
+  fill the viewport; the grid sorts by date added descending by default and the
+  sort field/order is configurable in Settings. Double-click an album to filter
+  tracks; select multiple albums for batch editing.
+- **Consistent Qt interface.** The app uses Qt's Fusion style and a menu-less
+  action bar, so buttons, menus, and other controls share one appearance instead
+  of mixing native macOS and Qt-drawn widgets. Settings and library actions are
+  available from the gear button. The window remembers its size between launches.
 - **Configurable columns.** Right-click the track header to show or hide columns,
   auto-fit all widths, or drag sections. Order, width, and visibility persist and
   are also editable in Settings.
@@ -36,8 +39,8 @@ consistent without cloud dependencies.
   highlighted and counted, and Save opens a preview before writing. Multi-track
   selections show shared values and italic `Multiple` placeholders, so one field
   can be applied to the whole selection. Batch edits and per-disc auto-numbering
-  are also available from the Edit menu.
-- **Artwork.** View, embed, replace, remove, and extract front-cover artwork.
+  are also available from the track and album context menus.
+- **Artwork.** View, embed, replace, remove, and extract front-cover artwork. Covers are read from embedded tags on demand for visible albums; there is no disk cover cache.
 - **Organization.** Rename and move files with a token template, live preview,
   collision detection, UUID remapping, journaling, and undo.
 - **Library maintenance.** Quick and full scans, changed-file refresh, missing
@@ -68,9 +71,9 @@ uv run trackstash
 On first run TrackStash creates `~/Music/TrackStash` and stores its database in
 `~/Library/Application Support/TrackStash/library.sqlite`.
 
-When launched with `uv run`, macOS attributes the application menu to the Python
-process. Use the packaged `.app` to see the native **TrackStash** application
-menu with About, Settings, and Quit.
+TrackStash uses Qt's Fusion style and does not install a main menu bar. The
+packaged `.app` and `uv run` development builds share the same in-window action
+bar, dark/light palette support, and Settings gear.
 
 Useful development flags:
 
@@ -132,7 +135,6 @@ src/trackstash/
     db.py                SQLite schema, upserts, journal, search
     library.py           import, scan, edit, organize, delete, undo
     template.py          tag-driven path templates and sanitization
-    artwork.py           album cover cache
     compat/              compatibility notes and future shared helpers
   ui/                    PySide6 window, dialogs, table model
   platform/              platform-specific services

@@ -20,7 +20,7 @@ library, but has **no runtime dependency** on either project.
 - Quick Scan and Full Scan discovery rules.
 - Upsert behavior that preserves user metadata.
 - Missing-file review rules.
-- Album artwork cache naming and sizing.
+- On-demand album artwork loading from embedded tags.
 
 ## 2. What is not ported
 
@@ -111,9 +111,8 @@ songs(id, path, library_id, title, artist_id, album_id, genre, year,
       play_count, rating, loved, last_played, skip_count, mtime, file_size)
 ```
 
-`albums.artwork` remains `NULL`; artwork is cached on disk as
-`<ALBUM-UUID>.jpg` under
-`~/Library/Application Support/TrackStash/Artwork/`.
+`albums.artwork` remains `NULL`; artwork is read from embedded tags on demand
+for visible albums and is not cached on disk.
 
 TrackStash-specific data lives in `ts_*` tables:
 
@@ -121,7 +120,7 @@ TrackStash-specific data lives in `ts_*` tables:
 - `ts_audio_properties` — format, codec, bitrate, sample rate, channels, bit depth.
 - `ts_file_state` — content hash, hash state, scan error, offline flag.
 - `ts_tag_value` — multi-value and unknown/custom tags.
-- `ts_artwork` — per-track artwork metadata.
+- `ts_artwork` — per-track embedded artwork metadata (no disk cache).
 - `ts_operations` / `ts_operation_items` — journal and reversible prior state.
 - `ts_track_fts` — FTS5 search index.
 - `ts_saved_views`, `ts_presets`, `ts_settings` — user configuration.
@@ -145,13 +144,13 @@ Ported from Tracks/WebTracks:
   preserving play counts, stars, ratings, last-played time, and skip counts.
 - Missing files are reviewed; only explicitly selected rows are removed. A scan
   never deletes files.
-- Artwork is cached as `<ALBUM-UUID>.jpg`, 500 px on the longest edge at JPEG
-  quality 80 by default.
+- Artwork is loaded from embedded tags for visible albums and cached in memory
+  only; no cover files are written to disk.
 
 TrackStash-specific behavior:
 
 - Imports copy by default and may move on request. Files are organized by tags
-  using the default template `{album_artist}/{album}/{disc_dir}{track:02} {title}`. `{disc_dir}` inserts a `Disc N/` component only for multi-disc albums, preventing track-number collisions between discs.
+  using the default template `{album_artist}/{album}/{disc_prefix}{track:02} {title}`. `{disc_prefix}` inserts `01-` before the track number only for multi-disc albums, preventing filename collisions without creating per-disc folders.
 - Only tags edited in the import wizard are written back to the imported file.
 - Tag writes use mutagen and preserve unknown tags where the container supports
   them.

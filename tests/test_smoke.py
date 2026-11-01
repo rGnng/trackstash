@@ -24,7 +24,7 @@ def test_pyside6_is_pinned() -> None:
 
 def test_main_window_starts(qtbot: QtBot, tmp_path: Path) -> None:
     database = Database(tmp_path / "library.sqlite")
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    window = MainWindow(database)
     qtbot.addWidget(window)
     window.show()
 
@@ -46,6 +46,19 @@ def test_application_uses_fusion_style(qtbot: QtBot) -> None:
         assert app.style().objectName().casefold() == "fusion"
     finally:
         app.setStyle(previous_style)
+
+
+def test_songs_track_and_disc_columns_are_text(tmp_path: Path) -> None:
+    database = Database(tmp_path / "schema.sqlite")
+    with database.connect() as connection:
+        columns = {
+            row["name"]: row["type"]
+            for row in connection.execute("PRAGMA table_info(songs)").fetchall()
+        }
+    assert columns["track"] == "TEXT"
+    assert columns["track_total"] == "TEXT"
+    assert columns["disc"] == "TEXT"
+    assert columns["disc_total"] == "TEXT"
 
 
 def test_sqlite_has_fts5() -> None:

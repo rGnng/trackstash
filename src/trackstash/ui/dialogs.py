@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -701,64 +702,128 @@ class DuplicateDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
-    """Application settings and database backup."""
+    """Application settings, column layout, and library tools."""
 
     def __init__(
         self,
         database: Database,
         template: str,
-        cover_size: int,
-        quality: int,
         columns: Sequence[tuple[str, str]] = (),
         visible_columns: Sequence[str] = (),
+        album_sort: str = "date_added",
+        album_order: str = "desc",
+        selection_available: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.database = database
+        self.requested_action: str | None = None
+        self.library_buttons: dict[str, QPushButton] = {}
         self.setWindowTitle("TrackStash Settings")
-        self.setMinimumWidth(620)
+        self.setMinimumSize(680, 520)
         layout = QVBoxLayout(self)
+        self.tabs = QTabWidget(self)
+
+        general_tab = QWidget(self.tabs)
+        general_layout = QVBoxLayout(general_tab)
         form = QFormLayout()
-        self.template_edit = QLineEdit(template, self)
+        self.template_edit = QLineEdit(template, general_tab)
         form.addRow("Organization template", self.template_edit)
         template_hint = QLabel(
-            "Used by Import and Organize. {disc_dir} adds Disc N/ only for multi-disc albums.",
-            self,
+            "Used by Import and Organize. {disc_prefix} adds 01- before the "
+            "track number for multi-disc albums; {disc_dir} adds a Disc N/ folder.",
+            general_tab,
         )
         template_hint.setWordWrap(True)
         form.addRow("", template_hint)
-        self.cover_size = QSpinBox(self)
-        self.cover_size.setRange(64, 2000)
-        self.cover_size.setValue(cover_size)
-        form.addRow("Cover cache size (px)", self.cover_size)
-        self.quality = QSpinBox(self)
-        self.quality.setRange(15, 100)
-        self.quality.setValue(quality)
-        form.addRow("Cover JPEG quality", self.quality)
-        self.database_label = QLineEdit(str(database.path), self)
+        self.database_label = QLineEdit(str(database.path), general_tab)
         self.database_label.setReadOnly(True)
         form.addRow("Database", self.database_label)
-        layout.addLayout(form)
+        general_layout.addLayout(form)
 
-        columns_group = QGroupBox("Tracks view columns", self)
-        columns_layout = QVBoxLayout(columns_group)
-        self.column_checks: dict[str, QCheckBox] = {}
-        visible = set(visible_columns) if visible_columns else {key for key, _ in columns}
-        for key, label in columns:
-            check = QCheckBox(label, columns_group)
-            check.setChecked(key in visible)
-            columns_layout.addWidget(check)
-            self.column_checks[key] = check
-        layout.addWidget(columns_group)
+        albums_group = QGroupBox("Albums view", general_tab)
+        albums_form = QFormLayout(albums_group)
+        self.album_sort = QComboBox(albums_group)
+        for label, value in (
+            ("Date added", "date_added"),
+            ("Album title", "title"),
+            ("Artist", "artist"),
+            ("Year", "year"),
+        ):
+            self.album_sort.addItem(label, value)
+        sort_index = self.album_sort.findData(album_sort)
+        self.album_sort.setCurrentIndex(sort_index if sort_index >= 0 else 0)
+        albums_form.addRow("Sort by", self.album_sort)
+        self.album_order = QComboBox(albums_group)
+        self.album_order.addItem("Descending", "desc")
+        self.album_order.addItem("Ascending", "asc")
+        order_index = self.album_order.findData(album_order)
+        self.album_order.setCurrentIndex(order_index if order_index >= 0 else 0)
+        albums_form.addRow("Order", self.album_order)
+        general_layout.addWidget(albums_group)
 
         backup_row = QHBoxLayout()
-        backup_row.addWidget(QLabel("Create a consistent SQLite backup.", self))
-        backup = QPushButton("Backup Database…", self)
+        backup_row.addWidget(QLabel("Create a consistent SQLite backup.", general_tab))
+        backup = QPushButton("Backup Database…", general_tab)
         backup.clicked.connect(self._backup)
         backup_row.addStretch(1)
         backup_row.addWidget(backup)
-        layout.addLayout(backup_row)
+        general_layout.addLayout(backup_row)
+        general_layout.addStretch(1)
+        self.tabs.addTab(general_tab, "General")
 
+        columns_tab = QWidget(self.tabs)
+        columns_layout = QVBoxLayout(columns_tab)
+        columns_group = QGroupBox("Tracks view columns", columns_tab)
+        columns_grid = QGridLayout(columns_group)
+        self.column_checks: dict[str, QCheckBox] = {}
+        visible = set(visible_columns) if visible_columns else {key for key, _ in columns}
+        for index, (key, label) in enumerate(columns):
+            check = QCheckBox(label, columns_group)
+            check.setChecked(key in visible)
+            columns_grid.addWidget(check, index // 2, index % 2)
+            self.column_checks[key] = check
+        columns_layout.addWidget(columns_group)
+        columns_layout.addStretch(1)
+        self.tabs.addTab(columns_tab, "Columns")
+
+        library_tab = QWidget(self.tabs)
+        library_layout = QVBoxLayout(library_tab)
+        library_layout.addWidget(QLabel("Libraries and maintenance", library_tab))
+        library_row = QHBoxLayout()
+        library_row.addWidget(
+            self._library_button("manage_libraries", "Manage Libraries…", library_tab)
+        )
+        library_row.addWidget(
+            self._library_button("find_duplicates", "Find Duplicates…", library_tab)
+        )
+        library_row.addStretch(1)
+        library_layout.addLayout(library_row)
+
+        selection_group = QGroupBox("Current selection", library_tab)
+        selection_grid = QGridLayout(selection_group)
+        selection_actions = (
+            ("organize", "Organize…"),
+            ("delete", "Delete…"),
+            ("set_cover", "Set Cover…"),
+            ("remove_cover", "Remove Cover"),
+            ("extract_cover", "Extract Cover…"),
+        )
+        for index, (key, label) in enumerate(selection_actions):
+            button = self._library_button(key, label, selection_group, enabled=selection_available)
+            selection_grid.addWidget(button, index // 2, index % 2)
+        library_layout.addWidget(selection_group)
+        hint = QLabel(
+            "Organize, delete, and cover actions apply to the current selection in "
+            "the main window.",
+            library_tab,
+        )
+        hint.setWordWrap(True)
+        library_layout.addWidget(hint)
+        library_layout.addStretch(1)
+        self.tabs.addTab(library_tab, "Library")
+
+        layout.addWidget(self.tabs, 1)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=self,
@@ -766,6 +831,26 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _library_button(
+        self,
+        key: str,
+        text: str,
+        parent: QWidget,
+        *,
+        enabled: bool = True,
+    ) -> QPushButton:
+        button = QPushButton(text, parent)
+        button.setEnabled(enabled)
+        button.clicked.connect(
+            lambda _checked=False, action=key: self._request_library_action(action)
+        )
+        self.library_buttons[key] = button
+        return button
+
+    def _request_library_action(self, action: str) -> None:
+        self.requested_action = action
+        self.accept()
 
     def _backup(self) -> None:
         destination, _ = QFileDialog.getSaveFileName(
@@ -782,13 +867,13 @@ class SettingsDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Backup failed", str(exc))
 
-    def values(self) -> tuple[str, int, int, list[str]]:
+    def values(self) -> tuple[str, list[str], str, str]:
         visible = [key for key, check in self.column_checks.items() if check.isChecked()]
         return (
             self.template_edit.text().strip() or DEFAULT_TEMPLATE,
-            self.cover_size.value(),
-            self.quality.value(),
             visible or [key for key, _ in self.column_checks.items()],
+            str(self.album_sort.currentData() or "date_added"),
+            str(self.album_order.currentData() or "desc"),
         )
 
 

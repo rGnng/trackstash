@@ -32,7 +32,7 @@ def _library_with_tracks(tmp_path: Path, audio_factory: Path) -> tuple[Database,
         },
     )
     database = Database(tmp_path / "library.sqlite")
-    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    service = LibraryService(database)
     library = database.add_library(root, name="UI Library")
     plan = service.plan_import([incoming], library.id)
     service.execute_import(plan)
@@ -41,7 +41,7 @@ def _library_with_tracks(tmp_path: Path, audio_factory: Path) -> tuple[Database,
 
 def test_main_window_lists_and_filters(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
     database, library = _library_with_tracks(tmp_path, audio_factory)
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    window = MainWindow(database)
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
@@ -62,7 +62,7 @@ def test_main_window_lists_and_filters(qtbot: QtBot, tmp_path: Path, audio_facto
 
 def test_import_dialog_preview(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
     database, library = _library_with_tracks(tmp_path, audio_factory)
-    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    service = LibraryService(database)
     incoming = tmp_path / "More"
     incoming.mkdir()
     shutil.copy2(audio_factory / "sample.mp3", incoming / "sample.mp3")
@@ -85,7 +85,7 @@ def test_import_dialog_preview(qtbot: QtBot, tmp_path: Path, audio_factory: Path
 
 def test_single_track_tag_editor(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
     database, library = _library_with_tracks(tmp_path, audio_factory)
-    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    service = LibraryService(database)
     track = database.list_tracks(library_id=library.id)[0]
     dialog = TagEditorDialog(service, [track.id])
     qtbot.addWidget(dialog)
@@ -100,7 +100,7 @@ def test_import_dialog_execute(
     from PySide6.QtWidgets import QMessageBox
 
     database, library = _library_with_tracks(tmp_path, audio_factory)
-    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    service = LibraryService(database)
     incoming = tmp_path / "Execute"
     incoming.mkdir()
     shutil.copy2(audio_factory / "sample.mp3", incoming / "sample.mp3")
@@ -126,13 +126,13 @@ def test_import_dialog_execute(
 
 def test_album_grid_and_library_selector(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
     database, library = _library_with_tracks(tmp_path, audio_factory)
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    window = MainWindow(database)
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
 
-    assert window.library_combo.count() == 1
-    assert window.library_combo.currentData() == library.id
+    assert not hasattr(window, "library_combo")
+    assert window._current_library_id == library.id
     assert window.tabs.count() == 2
     assert window.tabs.currentIndex() == 1
     assert window.albums_view_button.isChecked()
@@ -159,33 +159,94 @@ def test_album_grid_and_library_selector(qtbot: QtBot, tmp_path: Path, audio_fac
     assert window.model.rowCount() == 1
 
 
+def test_album_grid_loads_cover_only_on_decoration(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+    from PySide6.QtCore import Qt
+
+    from trackstash.ui.models import AlbumGridModel
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    service = LibraryService(database)
+    track = database.list_tracks(library_id=library.id)[0]
+    cover = BytesIO()
+    Image.new("RGB", (32, 32), (30, 90, 160)).save(cover, "JPEG")
+    service.set_artwork([track.id], cover.getvalue(), mime="image/jpeg")
+    albums = database.list_albums(library.id)
+    model = AlbumGridModel(albums)
+    assert not model._icons
+
+    index = model.index(0, 0)
+    model.data(index)
+    assert not model._icons
+    decoration = model.data(index, Qt.ItemDataRole.DecorationRole)
+    assert len(model._icons) == 1
+    assert decoration is not None
+
+
+def test_album_grid_fills_viewport_with_fixed_gaps(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    database, _library = _library_with_tracks(tmp_path, audio_factory)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+
+    window._update_album_grid(1100)
+    assert window.album_view.iconSize().width() == 158
+    assert window.album_view.gridSize().width() == 180
+    assert window.album_view.gridSize().height() == 218
+
+    window._update_album_grid(940)
+    assert window.album_view.iconSize().width() == 162
+    assert window.album_view.gridSize().width() == 184
+    assert window.album_view.gridSize().height() == 222
+
+
 def test_album_grid_does_not_show_year(qtbot: QtBot) -> None:
     from trackstash.core.db import AlbumRow
     from trackstash.ui.models import AlbumGridModel
 
-    model = AlbumGridModel([AlbumRow("album-id", "Album Title", "Album Artist", "2024", 1, None)])
+    model = AlbumGridModel(
+        [AlbumRow("album-id", "Album Title", "Album Artist", "2024", 1, None, "")]
+    )
     text = model.data(model.index(0, 0))
     assert text == "Album Title\nAlbum Artist"
     assert "2024" not in str(text)
 
 
-def test_menu_roles_and_qt_menu_bar(qtbot: QtBot, tmp_path: Path) -> None:
-    from PySide6.QtGui import QAction
-
+def test_qt_top_bar_replaces_menu(qtbot: QtBot, tmp_path: Path) -> None:
     database = Database(tmp_path / "menu.sqlite")
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    window = MainWindow(database)
     qtbot.addWidget(window)
-    assert not window.menuBar().isNativeMenuBar()
-    assert window.quit_action.menuRole() == QAction.MenuRole.QuitRole
-    assert window.about_action.menuRole() == QAction.MenuRole.AboutRole
-    assert window.settings_action.menuRole() == QAction.MenuRole.PreferencesRole
+    assert window.menuBar().actions() == []
+    assert not window.menuBar().isVisible()
+    assert window.view_label.text() == "View"
+    assert window.albums_view_button.text() == "Albums"
+    assert window.tracks_view_button.text() == "Tracks"
+    assert window.import_button.text() == "Import…"
+    assert window.format_filter.currentText() == "All formats"
+    assert window.missing_artwork_button.text() == "No artwork"
+    assert window.undo_button.text() == "Undo"
+    assert window.redo_button.text() == "Redo"
+    assert window.settings_button.toolTip() == "Settings…"
+    assert window.refresh_button.toolTip() == "Refresh (Ctrl+R)"
+    assert not hasattr(window, "filters_button")
+    assert not hasattr(window, "about_action")
+    assert not hasattr(window, "help_action")
+    assert not hasattr(window, "quit_action")
+    assert not hasattr(window, "close_action")
+    assert not hasattr(window, "selection_actions")
+    assert not hasattr(window, "status_summary")
 
 
 def test_inline_editor_and_column_persistence(
     qtbot: QtBot, tmp_path: Path, audio_factory: Path
 ) -> None:
     database, _library = _library_with_tracks(tmp_path, audio_factory)
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    window = MainWindow(database)
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
@@ -194,7 +255,7 @@ def test_inline_editor_and_column_persistence(
     assert window.editor.lines["title"].text() == "UI Song"
     assert window.editor.edits()["title"] == "UI Song"
     assert window.import_action.text() == "Import…"
-    assert not hasattr(window, "import_button")
+    assert window.import_button.text() == "Import…"
 
     from trackstash.ui.models import COLUMNS
 
@@ -210,7 +271,7 @@ def test_inline_editor_and_column_persistence(
     assert "codec" not in window.visible_columns()
     assert database.get_setting("track_columns")
 
-    reopened = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    reopened = MainWindow(database)
     qtbot.addWidget(reopened)
     assert "codec" not in reopened.visible_columns()
     assert reopened.table.isColumnHidden(codec_index)
@@ -222,12 +283,47 @@ def test_library_manager_contains_scan_and_add(
     from trackstash.ui.library_manager import LibraryManagerDialog
 
     database, library = _library_with_tracks(tmp_path, audio_factory)
-    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    service = LibraryService(database)
     dialog = LibraryManagerDialog(database, service, library.id)
     qtbot.addWidget(dialog)
     assert dialog.quick_button.text() == "Quick Scan"
     assert dialog.full_button.text() == "Full Scan"
     assert dialog.library_combo.count() == 1
+
+
+def test_left_editor_cannot_be_collapsed(qtbot: QtBot, tmp_path: Path) -> None:
+    database = Database(tmp_path / "layout.sqlite")
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    assert not window.splitter.isCollapsible(0)
+    window.splitter.setSizes([0, 1000])
+    assert window.editor.isVisible()
+    assert window.editor.width() >= 300
+
+
+def test_window_size_persists(qtbot: QtBot, tmp_path: Path) -> None:
+    database = Database(tmp_path / "window.sqlite")
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    window.show()
+    window.resize(1360, 860)
+    window.close()
+
+    reopened = MainWindow(database)
+    qtbot.addWidget(reopened)
+    assert (reopened.width(), reopened.height()) == (1360, 860)
+
+
+def test_legacy_default_template_is_migrated(qtbot: QtBot, tmp_path: Path) -> None:
+    from trackstash.core.template import DEFAULT_TEMPLATE, LEGACY_DEFAULT_TEMPLATE
+
+    database = Database(tmp_path / "template.sqlite")
+    database.set_setting("default_template", LEGACY_DEFAULT_TEMPLATE)
+    window = MainWindow(database)
+    qtbot.addWidget(window)
+    assert window.service.default_template == DEFAULT_TEMPLATE
+    assert database.get_setting("default_template") == DEFAULT_TEMPLATE
 
 
 def test_settings_can_choose_track_columns(qtbot: QtBot, tmp_path: Path) -> None:
@@ -238,15 +334,50 @@ def test_settings_can_choose_track_columns(qtbot: QtBot, tmp_path: Path) -> None
     dialog = SettingsDialog(
         database,
         "{artist}/{album}/{title}",
-        500,
-        80,
         [(key, label) for label, key in COLUMNS],
         ["title", "codec"],
     )
     qtbot.addWidget(dialog)
     assert dialog.column_checks["codec"].isChecked()
     assert dialog.column_checks["path"].isChecked() is False
-    assert dialog.values()[3] == ["title", "codec"]
+    assert dialog.values()[1] == ["title", "codec"]
+    assert dialog.values()[2:] == ("date_added", "desc")
+
+
+def test_settings_contains_library_actions(qtbot: QtBot, tmp_path: Path) -> None:
+    from PySide6.QtWidgets import QDialog
+
+    from trackstash.ui.dialogs import SettingsDialog
+
+    database = Database(tmp_path / "settings-library.sqlite")
+    dialog = SettingsDialog(
+        database,
+        "{artist}/{album}/{title}",
+        selection_available=True,
+    )
+    qtbot.addWidget(dialog)
+    assert dialog.tabs.count() == 3
+    assert set(dialog.library_buttons) == {
+        "manage_libraries",
+        "find_duplicates",
+        "organize",
+        "delete",
+        "set_cover",
+        "remove_cover",
+        "extract_cover",
+    }
+    dialog.library_buttons["organize"].click()
+    assert dialog.requested_action == "organize"
+    assert dialog.result() == QDialog.DialogCode.Accepted
+
+    empty = SettingsDialog(
+        database,
+        "{artist}/{album}/{title}",
+        selection_available=False,
+    )
+    qtbot.addWidget(empty)
+    assert empty.library_buttons["manage_libraries"].isEnabled()
+    assert not empty.library_buttons["organize"].isEnabled()
 
 
 def test_inline_save_and_table_sorting(
@@ -256,7 +387,7 @@ def test_inline_save_and_table_sorting(
     from PySide6.QtWidgets import QDialog, QMessageBox
 
     database, library = _library_with_tracks(tmp_path, audio_factory)
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    window = MainWindow(database)
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
@@ -284,7 +415,7 @@ def test_album_multi_selection(
     from PySide6.QtWidgets import QAbstractItemView
 
     database, library = _library_with_tracks(tmp_path, audio_factory)
-    service = LibraryService(database, artwork_dir=tmp_path / "Artwork")
+    service = LibraryService(database)
     extra = tmp_path / "Extra"
     extra.mkdir()
     source = extra / "second.flac"
@@ -307,7 +438,7 @@ def test_album_multi_selection(
     Image.new("RGB", (32, 32), (20, 120, 180)).save(cover, "JPEG")
     track_ids = [track.id for track in database.list_tracks(library_id=library.id)]
     service.set_artwork(track_ids, cover.getvalue(), mime="image/jpeg")
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    window = MainWindow(database)
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
@@ -343,7 +474,7 @@ def test_inline_pending_changes_and_go_to_album(
     from PySide6.QtWidgets import QDialog, QMessageBox
 
     database, library = _library_with_tracks(tmp_path, audio_factory)
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    window = MainWindow(database)
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
@@ -351,6 +482,7 @@ def test_inline_pending_changes_and_go_to_album(
     window.table.selectRow(0)
     editor = window.editor
     assert editor.has_pending_changes is False
+    assert editor.pending_label.text() == ""
 
     editor.lines["title"].setText("Pending Title")
     editor._field_changed("title")
@@ -376,7 +508,7 @@ def test_inline_pending_changes_and_go_to_album(
 
 def test_auto_fit_all_columns(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
     database, _library = _library_with_tracks(tmp_path, audio_factory)
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    window = MainWindow(database)
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
@@ -384,13 +516,11 @@ def test_auto_fit_all_columns(qtbot: QtBot, tmp_path: Path, audio_factory: Path)
     assert database.get_setting("track_columns")
 
 
-def test_numeric_fields_are_text_and_validated(
-    qtbot: QtBot, tmp_path: Path, audio_factory: Path
-) -> None:
+def test_track_and_disc_accept_text(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
     from PySide6.QtWidgets import QLineEdit
 
     database, _library = _library_with_tracks(tmp_path, audio_factory)
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
+    window = MainWindow(database)
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
@@ -402,22 +532,5 @@ def test_numeric_fields_are_text_and_validated(
     assert not editor.lines["track"].isClearButtonEnabled()
     editor.lines["track"].setText("A1")
     editor._field_changed("track")
-    assert editor.save_button.isEnabled() is False
-    assert "numeric" in editor.pending_label.text().lower()
-
-
-def test_status_bar_shows_selection(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
-    database, _library = _library_with_tracks(tmp_path, audio_factory)
-    window = MainWindow(database, artwork_dir=tmp_path / "Artwork")
-    qtbot.addWidget(window)
-    window.show()
-    window.refresh_libraries()
-    window.tracks_view_button.click()
-    window.table.clearSelection()
-    window._update_status()
-    assert "tracks" in window.status_summary.text()
-    assert "selected" not in window.status_selection.text()
-    window.table.selectRow(0)
-    assert "1 selected" in window.status_selection.text()
-    window.table.clearSelection()
-    assert "selected" not in window.status_selection.text()
+    assert editor.save_button.isEnabled() is True
+    assert editor.pending_edits()["track"] == "A1"

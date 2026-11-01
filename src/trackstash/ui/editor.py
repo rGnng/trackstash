@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QFont, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
 from trackstash.core.db import Track
 from trackstash.core.metadata import TagSet
 
-NUMERIC_TEXT_FIELDS = {"track", "track_total", "disc", "disc_total"}
 FIELD_KEYS = (
     "title",
     "artists",
@@ -50,6 +49,8 @@ class TrackInfoEditor(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("trackInfoEditor")
+        self.setStyleSheet("#trackInfoEditor { background-color: palette(base); }")
         self._track: Track | None = None
         self._tags: TagSet | None = None
         self._multi_mode = False
@@ -58,7 +59,6 @@ class TrackInfoEditor(QWidget):
         self._multi_base: dict[str, object] = {}
         self._baseline: dict[str, object] = {}
         self._dirty: set[str] = set()
-        self._invalid: set[str] = set()
         self._loading = False
         self._artwork_pixmap = QPixmap()
 
@@ -69,18 +69,20 @@ class TrackInfoEditor(QWidget):
         self.save_button.clicked.connect(self._emit_save)
         self.revert_button = QPushButton("Revert", self)
         self.revert_button.clicked.connect(self._revert)
-        self.pending_label = QLabel("No pending changes", self)
+        self.pending_label = QLabel("", self)
         self.pending_label.setStyleSheet("color: palette(text);")
         scroll = QScrollArea(self)
+        self._scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.viewport().installEventFilter(self)
         body = QWidget(scroll)
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(4)
 
         self.artwork = QLabel(body)
-        self.artwork.setMinimumSize(160, 160)
+        self.artwork.setMinimumSize(1, 1)
         self.artwork.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.artwork.setStyleSheet(
             "border: 1px solid #3A4554; background-color: #1B212B; color: #AAB4C3;"
@@ -130,8 +132,14 @@ class TrackInfoEditor(QWidget):
         add_full("album", "Album")
         add_full("album_artist", "Album Artist")
         add_row((("genres", "Genre"), ("year", "Year")))
-        add_row((("track", "Track"), ("track_total", "Track Total")))
-        add_row((("disc", "Disc"), ("disc_total", "Disc Total")))
+        add_row(
+            (
+                ("track", "Track"),
+                ("track_total", "Track Total"),
+                ("disc", "Disc"),
+                ("disc_total", "Disc Total"),
+            )
+        )
         add_full("comment", "Comment")
         add_row(
             (
@@ -158,11 +166,26 @@ class TrackInfoEditor(QWidget):
         self._refresh_dirty()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
-        if hasattr(self, "artwork"):
-            width = max(160, self.width() - 40)
+        self._update_artwork_size()
+        super().resizeEvent(event)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            hasattr(self, "_scroll")
+            and watched is self._scroll.viewport()
+            and event.type() == QEvent.Type.Resize
+        ):
+            self._update_artwork_size()
+        return super().eventFilter(watched, event)
+
+    def _update_artwork_size(self) -> None:
+        if not hasattr(self, "artwork"):
+            return
+        viewport = self._scroll.viewport().width()
+        width = max(1, viewport if viewport > 1 else self.width() - 8)
+        if self.artwork.width() != width:
             self.artwork.setFixedSize(width, width)
             self._render_artwork()
-        super().resizeEvent(event)
 
     def _render_artwork(self) -> None:
         if self._artwork_pixmap.isNull():
@@ -210,10 +233,10 @@ class TrackInfoEditor(QWidget):
             "album_artist": tags.album_artist,
             "genres": list(tags.genres),
             "year": tags.year,
-            "track": str(tags.track) if tags.track else "",
-            "track_total": str(tags.track_total) if tags.track_total else "",
-            "disc": str(tags.disc) if tags.disc else "",
-            "disc_total": str(tags.disc_total) if tags.disc_total else "",
+            "track": tags.track,
+            "track_total": tags.track_total,
+            "disc": tags.disc,
+            "disc_total": tags.disc_total,
             "comment": tags.comment,
             "composer": tags.composer,
             "bpm": tags.bpm,
@@ -229,22 +252,10 @@ class TrackInfoEditor(QWidget):
             line.setPlaceholderText("")
         self._refresh_dirty()
 
-    def _field_is_valid(self, key: str) -> bool:
-        text = self.lines[key].text().strip()
-        if key not in NUMERIC_TEXT_FIELDS:
-            return True
-        if key in {"track", "disc"}:
-            if not text:
-                return True
-            parts = text.split("/")
-            return len(parts) <= 2 and all(part.isdigit() for part in parts)
-        return not text or text.isdigit()
-
     def _refresh_dirty(self) -> None:
         if self._track is None and not self._multi_mode:
             self._dirty.clear()
-            self._invalid.clear()
-            self.pending_label.setText("No pending changes")
+            self.pending_label.setText("")
             self.pending_label.setStyleSheet("color: palette(text);")
             self.save_button.setEnabled(False)
             self.revert_button.setEnabled(False)
@@ -254,8 +265,6 @@ class TrackInfoEditor(QWidget):
                 label.setStyleSheet("font-size: 11px;")
             return
         current = self.edits()
-        invalid = {key for key in NUMERIC_TEXT_FIELDS if not self._field_is_valid(key)}
-        self._invalid = invalid
         dirty: set[str] = set()
         if self._multi_mode:
             for key in FIELD_KEYS:
@@ -276,11 +285,7 @@ class TrackInfoEditor(QWidget):
         self._dirty = dirty
         for key, widget in self.lines.items():
             caption = self.labels.get(key)
-            if key in invalid:
-                widget.setStyleSheet("border: 1px solid #D9534F;")
-                if caption is not None:
-                    caption.setStyleSheet("font-size: 11px; color: #D9534F; font-weight: 600;")
-            elif key in dirty:
+            if key in dirty:
                 widget.setStyleSheet("border: 1px solid #D99A3D;")
                 if caption is not None:
                     caption.setStyleSheet("font-size: 11px; color: #D99A3D; font-weight: 600;")
@@ -288,19 +293,14 @@ class TrackInfoEditor(QWidget):
                 widget.setStyleSheet("")
                 if caption is not None:
                     caption.setStyleSheet("font-size: 11px;")
-        if invalid:
-            self.pending_label.setText("Track and disc values must be numeric")
-            self.pending_label.setStyleSheet("color: #C9302C; font-weight: 600;")
-            self.save_button.setEnabled(False)
-            self.revert_button.setEnabled(True)
-        elif dirty:
+        if dirty:
             count = len(dirty)
             self.pending_label.setText(f"{count} pending change{'s' if count != 1 else ''}")
             self.pending_label.setStyleSheet("color: #D99A3D; font-weight: 600;")
             self.save_button.setEnabled(True)
             self.revert_button.setEnabled(True)
         else:
-            self.pending_label.setText("No pending changes")
+            self.pending_label.setText("")
             self.pending_label.setStyleSheet("color: palette(text);")
             self.save_button.setEnabled(False)
             self.revert_button.setEnabled(False)
@@ -396,7 +396,7 @@ class TrackInfoEditor(QWidget):
         return self._multi_mode
 
     def _emit_save(self) -> None:
-        if (self._track is not None or self._multi_mode) and self._dirty and not self._invalid:
+        if (self._track is not None or self._multi_mode) and self._dirty:
             self.save_requested.emit(self.pending_edits())
 
     def _revert(self) -> None:

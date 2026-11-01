@@ -14,10 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import platformdirs
 from send2trash import send2trash
 
-from trackstash.core.artwork import write_album_cover
 from trackstash.core.db import Database, Library, Track
 from trackstash.core.identity import (
     canonical_path,
@@ -233,19 +231,10 @@ class LibraryService:
         self,
         db: Database,
         *,
-        artwork_dir: str | Path | None = None,
         default_template: str = DEFAULT_TEMPLATE,
-        cover_size: int = 500,
-        cover_quality: int = 80,
     ) -> None:
         self.db = db
-        self.artwork_dir = Path(
-            artwork_dir or (Path(platformdirs.user_data_dir("TrackStash")) / "Artwork")
-        )
-        self.artwork_dir.mkdir(parents=True, exist_ok=True)
         self.default_template = default_template
-        self.cover_size = cover_size
-        self.cover_quality = cover_quality
 
     # ------------------------------------------------------------------
     # Import
@@ -440,7 +429,6 @@ class LibraryService:
                 if not tracks:
                     raise RuntimeError("Track was not indexed")
                 track = tracks[0]
-                self._cache_cover(metadata, track)
                 self.db.update_content_hash(track.id, content_hash(destination))
                 self.db.add_operation_item(
                     operation_id,
@@ -518,18 +506,6 @@ class LibraryService:
                 pass
             raise
 
-    def _cache_cover(self, metadata: TrackMetadata, track: Track) -> None:
-        artwork = metadata.artwork[0] if metadata.artwork else None
-        path = write_album_cover(
-            artwork,
-            track.album_id,
-            self.artwork_dir,
-            size=self.cover_size,
-            quality=self.cover_quality,
-        )
-        if path is not None:
-            self.db.set_artwork_cache(track.id, str(path))
-
     # ------------------------------------------------------------------
     # Scan
 
@@ -602,10 +578,7 @@ class LibraryService:
         if progress:
             progress("Updating database", 0, len(metadata_list), "")
         tracks = self.db.upsert_tracks(metadata_list, library)
-        for index, (metadata, track) in enumerate(
-            zip(metadata_list, tracks, strict=False), start=1
-        ):
-            self._cache_cover(metadata, track)
+        for index, track in enumerate(tracks, start=1):
             try:
                 self.db.update_content_hash(track.id, content_hash(track.path))
             except OSError:
@@ -672,15 +645,15 @@ class LibraryService:
     ) -> list[TagChange]:
         """Preview sequential track numbers, grouped per album/disc."""
         tracks = [track for song_id in song_ids if (track := self.db.get_track(song_id))]
-        groups: dict[tuple[str, int], list[Track]] = {}
+        groups: dict[tuple[str, str], list[Track]] = {}
         for track in tracks:
-            key = (track.album_id, track.disc if per_disc else 0)
+            key = (track.album_id, track.disc if per_disc else "")
             groups.setdefault(key, []).append(track)
         changes: list[TagChange] = []
         for group in groups.values():
             group.sort(
                 key=lambda item: (
-                    item.track if item.track > 0 else 9999,
+                    int(item.track) if item.track.isdigit() else 9999,
                     item.title.casefold(),
                     item.path,
                 )
@@ -690,7 +663,10 @@ class LibraryService:
                 tags = self.db.load_tag_set(track.id)
                 if tags is None:
                     continue
-                after = apply_tag_edits(tags, {"track": start + offset, "track_total": total})
+                after = apply_tag_edits(
+                    tags,
+                    {"track": str(start + offset), "track_total": str(total)},
+                )
                 before = tagset_to_dict(tags)
                 changed = [
                     key for key, value in tagset_to_dict(after).items() if before.get(key) != value
@@ -747,7 +723,6 @@ class LibraryService:
                 if not written:
                     raise RuntimeError("Track was not indexed after numbering")
                 track = written[0]
-                self._cache_cover(metadata, track)
                 self.db.add_operation_item(
                     operation_id,
                     song_id=track.id,
@@ -806,7 +781,6 @@ class LibraryService:
                 if not written:
                     raise RuntimeError("Track was not indexed after writing tags")
                 track = written[0]
-                self._cache_cover(metadata, track)
                 self.db.add_operation_item(
                     operation_id,
                     song_id=track.id,
@@ -1089,9 +1063,7 @@ class LibraryService:
                 library = self.db.get_library(track.library_id or "")
                 if library is None:
                     raise ValueError("Library not found")
-                written = self.db.upsert_tracks([metadata], library)
-                if written:
-                    self._cache_cover(metadata, written[0])
+                self.db.upsert_tracks([metadata], library)
             except Exception as exc:
                 errors.append(f"{song_id}: {exc}")
             if progress:
@@ -1323,9 +1295,7 @@ class LibraryService:
             library = self.db.get_library(library_id) if library_id else None
             if library is None:
                 return 0
-            written = self.db.upsert_tracks([metadata], library)
-            if written:
-                self._cache_cover(metadata, written[0])
+            self.db.upsert_tracks([metadata], library)
             return 1
         except Exception as exc:
             errors.append(f"{path_value}: {exc}")
@@ -1362,9 +1332,7 @@ class LibraryService:
             library = self.db.get_library(library_id) if library_id else None
             if library is None:
                 return 0
-            written = self.db.upsert_tracks([metadata], library)
-            if written:
-                self._cache_cover(metadata, written[0])
+            self.db.upsert_tracks([metadata], library)
             return 1
         except Exception as exc:
             errors.append(f"{path}: {exc}")
