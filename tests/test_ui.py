@@ -134,8 +134,20 @@ def test_album_grid_and_library_selector(qtbot: QtBot, tmp_path: Path, audio_fac
     assert window.library_combo.count() == 1
     assert window.library_combo.currentData() == library.id
     assert window.tabs.count() == 2
+    assert window.tabs.currentIndex() == 1
+    assert window.albums_view_button.isChecked()
+    assert not window.tracks_view_button.isChecked()
+    assert window.albums_view_button.text() == "Albums"
+    assert window.tracks_view_button.text() == "Tracks"
     assert window.album_model.rowCount() == 1
     assert window.album_model.data(window.album_model.index(0, 0)) is not None
+
+    window.tracks_view_button.click()
+    assert window.tabs.currentIndex() == 0
+    assert window.tracks_view_button.isChecked()
+    assert not window.albums_view_button.isChecked()
+    window.albums_view_button.click()
+    assert window.tabs.currentIndex() == 1
 
     window._album_activated(window.album_model.index(0, 0))
     assert window.tabs.currentIndex() == 0
@@ -166,6 +178,7 @@ def test_inline_editor_and_column_persistence(
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
+    window.tracks_view_button.click()
     window.table.selectRow(0)
     assert window.editor.lines["title"].text() == "UI Song"
     assert window.editor.edits()["title"] == "UI Song"
@@ -236,6 +249,7 @@ def test_inline_save_and_table_sorting(
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
+    window.tracks_view_button.click()
     window.table.selectRow(0)
 
     monkeypatch.setattr(
@@ -322,6 +336,7 @@ def test_inline_pending_changes_and_go_to_album(
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
+    window.tracks_view_button.click()
     window.table.selectRow(0)
     editor = window.editor
     assert editor.has_pending_changes is False
@@ -368,6 +383,7 @@ def test_numeric_fields_are_text_and_validated(
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
+    window.tracks_view_button.click()
     window.table.selectRow(0)
     editor = window.editor
     assert isinstance(editor.lines["track"], QLineEdit)
@@ -385,10 +401,12 @@ def test_status_bar_shows_selection(qtbot: QtBot, tmp_path: Path, audio_factory:
     qtbot.addWidget(window)
     window.show()
     window.refresh_libraries()
+    window.tracks_view_button.click()
     window.table.clearSelection()
     window._update_status()
     assert "tracks" in window.status_summary.text()
+    assert "selected" not in window.status_selection.text()
     window.table.selectRow(0)
-    assert "1 selected" in window.status_summary.text()
+    assert "1 selected" in window.status_selection.text()
     window.table.clearSelection()
-    assert "selected" not in window.status_summary.text()
+    assert "selected" not in window.status_selection.text()

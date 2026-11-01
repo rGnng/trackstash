@@ -675,7 +675,7 @@ class DuplicateDialog(QDialog):
                 table.setItem(
                     row,
                     5,
-                    QTableWidgetItem(f"{track.bitrate} kbps" if track.bitrate else ""),
+                    QTableWidgetItem(f"{track.bitrate} Kbps" if track.bitrate else ""),
                 )
                 path_item = QTableWidgetItem(track.path)
                 path_item.setData(Qt.ItemDataRole.UserRole, track.id)

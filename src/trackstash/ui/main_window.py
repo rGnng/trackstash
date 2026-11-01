@@ -19,6 +19,7 @@ from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -32,8 +33,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QTableView,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -102,10 +103,11 @@ class MainWindow(QMainWindow):
         self._column_config: dict[str, object] = {}
         self._loading_columns = False
         self._columns_ready = False
+        self.tabs: QStackedWidget
 
         self.setWindowTitle("TrackStash")
         self.resize(1440, 900)
-        self.setMinimumSize(1100, 700)
+        self.setMinimumSize(1280, 700)
 
         self._create_actions()
         self._create_menus()
@@ -170,11 +172,12 @@ class MainWindow(QMainWindow):
         self.tracks_view_action = QAction("Tracks", self)
         self.tracks_view_action.setShortcut(QKeySequence("Ctrl+1"))
         self.tracks_view_action.setCheckable(True)
-        self.tracks_view_action.setChecked(True)
+        self.tracks_view_action.setChecked(False)
         self.tracks_view_action.triggered.connect(lambda: self.tabs.setCurrentIndex(0))
         self.albums_view_action = QAction("Albums", self)
         self.albums_view_action.setShortcut(QKeySequence("Ctrl+2"))
         self.albums_view_action.setCheckable(True)
+        self.albums_view_action.setChecked(True)
         self.albums_view_action.triggered.connect(lambda: self.tabs.setCurrentIndex(1))
         self.focus_search_action = QAction("Search", self)
         self.focus_search_action.setShortcut(QKeySequence.StandardKey.Find)
@@ -265,6 +268,40 @@ class MainWindow(QMainWindow):
         right_layout.setSpacing(4)
 
         library_row = QHBoxLayout()
+        view_label = QLabel("View:", right)
+        library_row.addWidget(view_label)
+        self.albums_view_button = QPushButton("Albums", right)
+        self.tracks_view_button = QPushButton("Tracks", right)
+        self.albums_view_button.setObjectName("viewSwitchFirst")
+        self.tracks_view_button.setObjectName("viewSwitchLast")
+        view_button_style = (
+            "QPushButton { border: 1px solid palette(mid); padding: 3px 10px; }"
+            "QPushButton#viewSwitchFirst { border-top-left-radius: 5px;"
+            " border-bottom-left-radius: 5px; }"
+            "QPushButton#viewSwitchLast { border-left: none;"
+            " border-top-right-radius: 5px; border-bottom-right-radius: 5px; }"
+            "QPushButton:checked { background-color: palette(highlight);"
+            " color: palette(highlighted-text); border-color: palette(highlight); }"
+        )
+        self._view_button_group = QButtonGroup(right)
+        self._view_button_group.setExclusive(True)
+        for button, index in (
+            (self.albums_view_button, 1),
+            (self.tracks_view_button, 0),
+        ):
+            button.setCheckable(True)
+            button.setAutoExclusive(True)
+            button.setStyleSheet(view_button_style)
+            button.setMinimumWidth(70)
+            button.clicked.connect(
+                lambda _checked=False, page=index: self.tabs.setCurrentIndex(page)
+            )
+            self._view_button_group.addButton(button)
+            library_row.addWidget(button)
+        self.albums_view_button.setChecked(True)
+        self.albums_view_button.setToolTip("Albums view (Ctrl+2)")
+        self.tracks_view_button.setToolTip("Tracks view (Ctrl+1)")
+        library_row.addSpacing(10)
         library_row.addWidget(QLabel("Library", right))
         self.library_combo = QComboBox(right)
         self.library_combo.setMinimumWidth(150)
@@ -277,6 +314,7 @@ class MainWindow(QMainWindow):
         self.search_edit = QLineEdit(right)
         self.search_edit.setPlaceholderText("Search title, artist, album, genre, path…")
         self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setMinimumWidth(170)
         self.search_edit.textChanged.connect(self.refresh_tracks)
         library_row.addWidget(self.search_edit, 1)
         self.format_filter = QComboBox(right)
@@ -290,7 +328,7 @@ class MainWindow(QMainWindow):
         library_row.addWidget(self.missing_artwork)
         right_layout.addLayout(library_row)
 
-        self.tabs = QTabWidget(right)
+        self.tabs = QStackedWidget(right)
         self.tabs.currentChanged.connect(self._tab_changed)
 
         tracks_tab = QWidget(self.tabs)
@@ -329,7 +367,7 @@ class MainWindow(QMainWindow):
         self.table.customContextMenuRequested.connect(self._track_context_menu)
         self.table.selectionModel().selectionChanged.connect(self._selection_changed)
         tracks_layout.addWidget(self.table, 1)
-        self.tabs.addTab(tracks_tab, "Tracks")
+        self.tabs.addWidget(tracks_tab)
 
         albums_tab = QWidget(self.tabs)
         albums_layout = QVBoxLayout(albums_tab)
@@ -353,7 +391,7 @@ class MainWindow(QMainWindow):
         self.album_view.doubleClicked.connect(self._album_activated)
         self.album_view.selectionModel().selectionChanged.connect(self._selection_changed)
         albums_layout.addWidget(self.album_view, 1)
-        self.tabs.addTab(albums_tab, "Albums")
+        self.tabs.addWidget(albums_tab)
         right_layout.addWidget(self.tabs, 1)
         splitter.addWidget(right)
 
@@ -365,11 +403,15 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(outer)
 
         self._load_column_config()
+        self.tabs.setCurrentIndex(1)
 
     def _create_status_bar(self) -> None:
         self.status_summary = QLabel("", self)
         self.status_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.statusBar().addWidget(self.status_summary, 1)
+        self.statusBar().addWidget(self.status_summary)
+        self.status_selection = QLabel("", self)
+        self.status_selection.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.statusBar().addWidget(self.status_selection)
         self._library_label = ""
         self._total_tracks = 0
         self._status_message = ""
@@ -393,12 +435,14 @@ class MainWindow(QMainWindow):
             if self._library_label
             else "No library selected"
         )
+        details: list[str] = []
         selected = self._selection_item_count()
         if selected:
-            base = f"{selected} selected · {base}"
+            details.append(f"{selected} selected")
         if self._status_message:
-            base = f"{self._status_message} · {base}"
+            details.append(self._status_message)
         self.status_summary.setText(base)
+        self.status_selection.setText(" · ".join(details))
 
     # ------------------------------------------------------------------
     # Library selection
@@ -493,13 +537,14 @@ class MainWindow(QMainWindow):
         query = self.search_edit.text().strip() if hasattr(self, "search_edit") else ""
         albums = self.db.list_albums(self._current_library_id, query=query)
         self.album_model.set_albums(albums)
-        if hasattr(self, "tabs"):
-            self.tabs.setTabText(1, f"Albums ({len(albums)})")
 
     def _tab_changed(self, index: int) -> None:
         if hasattr(self, "tracks_view_action"):
             self.tracks_view_action.setChecked(index == 0)
             self.albums_view_action.setChecked(index == 1)
+        if hasattr(self, "albums_view_button"):
+            self.albums_view_button.setChecked(index == 1)
+            self.tracks_view_button.setChecked(index == 0)
         if index == 1:
             self.refresh_albums()
         self._selection_changed()

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | M0–M6 core implementation complete |
-| **Date** | 2026-10-31 |
+| **Date** | 2026-11-01 |
 | **Platform** | macOS 13+, Apple Silicon build |
 | **License** | GPL-3.0-only |
 
@@ -24,6 +24,7 @@
 - UUID reference vectors match Tracks/WebTracks, including non-ASCII paths and the
   Swift final-sigma case.
 - Metadata round-trips cover FLAC, MP3, M4A, OGG, Opus, WAV, AIFF, and WavPack.
+- Bitrates are stored and displayed in Kbps; schema v2 migrates pre-existing values.
 - Imports copy by default or move on request; sources are untouched in copy mode.
 - The import dialog accepts folders or individual files and warns before very large imports.
 - Tag edits update files and DB, verify by re-reading, and support undo/redo.
@@ -38,7 +39,7 @@
 Test status at the time of writing:
 
 ```text
-61 passed, 2 skipped (default suite)
+64 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 

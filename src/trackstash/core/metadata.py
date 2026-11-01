@@ -693,9 +693,12 @@ def read_metadata(path: str | Path) -> TrackMetadata:
     stat = Path(path_value).stat()
     info = getattr(audio, "info", None)
     duration = float(getattr(info, "length", 0.0) or 0.0)
+    # Mutagen exposes bitrates in bits per second; store the displayed Kbps value.
     bitrate = int(getattr(info, "bitrate", 0) or 0)
-    if not bitrate and duration > 0:
-        bitrate = int((stat.st_size * 8) / duration / 1000)
+    if bitrate:
+        bitrate = round(bitrate / 1000)
+    elif duration > 0:
+        bitrate = round((stat.st_size * 8) / duration / 1000)
     sample_rate = int(getattr(info, "sample_rate", 0) or 0)
     channels = int(getattr(info, "channels", 0) or 0)
     bit_depth = int(getattr(info, "bits_per_sample", 0) or 0)

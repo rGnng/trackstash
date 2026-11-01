@@ -34,6 +34,7 @@ def test_metadata_round_trip(audio_factory: Path, extension: str) -> None:
     assert metadata.format
     assert metadata.duration > 0
     assert metadata.file_size > 0
+    assert 0 < metadata.bitrate < 20000
 
     updated = write_tags(
         path,
@@ -92,6 +93,18 @@ def test_supported_extensions_include_target_formats() -> None:
     extensions = supported_extensions()
     for extension in (".flac", ".mp3", ".m4a", ".ogg", ".opus", ".ape", ".wv"):
         assert extension in extensions
+
+
+@pytest.mark.parametrize("extension", ["mp3", "m4a"])
+def test_bitrate_is_reported_in_kbps(audio_factory: Path, extension: str) -> None:
+    import mutagen
+
+    path = audio_factory / f"sample.{extension}"
+    audio = mutagen.File(str(path), easy=False)
+    assert audio is not None
+    raw_bitrate = int(getattr(audio.info, "bitrate", 0))
+    assert raw_bitrate > 0
+    assert read_metadata(path).bitrate == round(raw_bitrate / 1000)
 
 
 def test_unknown_tags_survive_known_edits(audio_factory: Path) -> None:

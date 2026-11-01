@@ -19,10 +19,11 @@ consistent without cloud dependencies.
   request from File → Import…, with a tag-driven destination template.
 - **Track context menu.** Edit Tags, Go to Album, Open, Open with, Delete, and
   Show in Finder.
-- **Tracks and Albums views.** A sortable track table with movable/resizable
-  columns (`Title`, `Format`, `Codec`, `Bitrate` in Kbps, and more) and a
-  virtualized album grid with cover art. Double-click an album to filter tracks;
-  select multiple albums for batch editing.
+- **Tracks and Albums views.** The app opens on the album grid; a compact
+  `View:` switch in the top bar toggles between Albums and Tracks. The track
+  table is sortable with movable/resizable columns (`Title`, `Format`, `Codec`,
+  `Bitrate` in Kbps, and more); the album grid shows cover art. Double-click an
+  album to filter tracks; select multiple albums for batch editing.
 - **Configurable columns.** Right-click the track header to show or hide columns,
   auto-fit all widths, or drag sections. Order, width, and visibility persist and
   are also editable in Settings.

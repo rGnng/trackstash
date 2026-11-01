@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,20 @@ def test_import_copies_and_computes_uuid(
     assert service.db.track_count(library.id) == 2
     assert len(service.db.list_tracks(query="Song 1")) == 1
     assert len(service.db.list_tracks(query="Test Artist")) == 2
+    assert all(0 < track.bitrate < 20000 for track in imported)
+
+
+def test_schema_migrates_bitrate_to_kbps(populated: tuple) -> None:
+    service, _, library, _ = populated
+    with sqlite3.connect(service.db.path) as connection:
+        connection.execute("UPDATE ts_audio_properties SET bitrate = bitrate * 1000")
+        connection.execute("PRAGMA user_version = 1")
+        connection.commit()
+
+    reopened = Database(service.db.path)
+    tracks = reopened.list_tracks(library_id=library.id)
+    assert tracks
+    assert all(0 < track.bitrate < 20000 for track in tracks)
 
 
 def test_duplicate_import_skip(service: LibraryService, populated: tuple) -> None:

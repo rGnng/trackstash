@@ -26,7 +26,7 @@ from trackstash.core.identity import (
 )
 from trackstash.core.metadata import TagSet, TrackMetadata
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS libraries (
@@ -389,6 +389,13 @@ class Database:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(SCHEMA_SQL)
             current = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if current < 2:
+                # V1 stored mutagen's bits-per-second value; normalize existing rows.
+                connection.execute(
+                    "UPDATE ts_audio_properties"
+                    " SET bitrate = CAST(ROUND(bitrate / 1000.0) AS INTEGER)"
+                    " WHERE bitrate > 20000"
+                )
             if current < SCHEMA_VERSION:
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             connection.commit()
