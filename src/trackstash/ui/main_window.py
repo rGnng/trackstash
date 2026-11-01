@@ -23,6 +23,7 @@ from PySide6.QtGui import (
     QDesktopServices,
     QIcon,
     QKeySequence,
+    QPalette,
     QPixmap,
     QResizeEvent,
 )
@@ -462,6 +463,10 @@ class MainWindow(QMainWindow):
         self.album_view = AlbumGridView(albums_tab)
         self.album_view.setModel(self.album_model)
         self.album_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.album_view.setBackgroundRole(QPalette.ColorRole.Base)
+        self.album_view.setAutoFillBackground(True)
+        self.album_view.viewport().setBackgroundRole(QPalette.ColorRole.Base)
+        self.album_view.viewport().setAutoFillBackground(True)
         self.album_view.setLineWidth(0)
         self.album_view.setViewMode(QListView.ViewMode.IconMode)
         self.album_view.setResizeMode(QListView.ResizeMode.Adjust)
