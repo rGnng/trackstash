@@ -58,6 +58,7 @@ __all__ = [
     "TagSet",
     "TrackMetadata",
     "apply_tag_edits",
+    "is_valid_numeric_tag",
     "read_artwork",
     "read_metadata",
     "remove_artwork",
@@ -282,6 +283,30 @@ def _natural(value: Any) -> str:
 def _int_value(value: object) -> int:
     text = _clean(value)
     return int(text) if text.isdigit() else 0
+
+
+_NUMERIC_TAG_FIELDS = frozenset({"track", "track_total", "disc", "disc_total"})
+_PAIRED_NUMERIC_TAG_FIELDS = frozenset({"track", "disc"})
+
+
+def is_valid_numeric_tag(field_name: str, value: object) -> bool:
+    """Validate a track/disc value edited by the user.
+
+    Track and disc numbers are numeric. They may also be entered as a
+    ``number/total`` pair, and values are not limited to one digit.
+    Totals accept a single number only. Empty values clear the field.
+    """
+    if field_name not in _NUMERIC_TAG_FIELDS:
+        return True
+    text = _clean(value)
+    if not text:
+        return True
+    parts = [part.strip() for part in text.split("/")]
+    if len(parts) > 2 or any(not part for part in parts):
+        return False
+    if len(parts) == 2 and field_name not in _PAIRED_NUMERIC_TAG_FIELDS:
+        return False
+    return all(part.isdigit() for part in parts)
 
 
 def _artwork_meta(

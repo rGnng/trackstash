@@ -41,6 +41,8 @@ def populated(
                 "genres": ["Rock"],
                 "track": index,
                 "track_total": 2,
+                "disc": "",
+                "disc_total": "",
                 "year": "2024",
             },
         )
@@ -293,6 +295,43 @@ def test_multi_disc_import_prefixes_disc_numbers(
     assert len({path.parent for path in paths}) == 1
     assert not any("Disc 1" in str(path) or "Disc 2" in str(path) for path in paths)
     assert [path.name for path in paths] == [
-        "01-01 Same Song.flac",
-        "02-01 Same Song.flac",
+        "1-01 Same Song.flac",
+        "2-01 Same Song.flac",
+    ]
+
+
+def test_disc_prefix_is_written_whenever_disc_exists(
+    service: LibraryService, tmp_path: Path, audio_factory: Path
+) -> None:
+    root = tmp_path / "DiscPrefix"
+    root.mkdir()
+    incoming = tmp_path / "DiscPrefixIncoming"
+    incoming.mkdir()
+    tracks = (
+        ("single.flac", 1, 5, "Single Disc"),
+        ("wide.flac", 10, 123, "Wide Numbers"),
+        ("hundred.flac", 100, 7, "Hundred Discs"),
+        ("none.flac", None, 12, "No Disc"),
+    )
+    for name, disc, track, title in tracks:
+        source = incoming / name
+        shutil.copy2(audio_factory / "sample.flac", source)
+        edits: dict[str, object] = {
+            "title": title,
+            "artists": ["Disc Artist"],
+            "album": "Prefix Album",
+            "album_artist": "Disc Artist",
+            "track": track,
+            "disc": disc if disc is not None else "",
+            "disc_total": "",
+        }
+        write_tags(source, edits)
+    library = service.db.add_library(root, name="Prefix")
+    result = service.execute_import(service.plan_import([incoming], library.id))
+    assert not result.errors
+    assert sorted(Path(track.path).name for track in result.imported) == [
+        "1-05 Single Disc.flac",
+        "10-123 Wide Numbers.flac",
+        "100-07 Hundred Discs.flac",
+        "12 No Disc.flac",
     ]

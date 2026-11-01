@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 from trackstash.core.metadata import (
+    is_valid_numeric_tag,
     read_artwork,
     read_metadata,
     remove_artwork,
@@ -110,6 +111,21 @@ def test_text_track_and_disc_round_trip(
     assert updated.tags.track_total == "Side A"
     assert updated.tags.disc == "B"
     assert updated.tags.disc_total == "2"
+
+
+def test_numeric_tag_validation_accepts_two_and_three_digits() -> None:
+    for field in ("track", "track_total", "disc", "disc_total"):
+        assert is_valid_numeric_tag(field, "")
+        assert is_valid_numeric_tag(field, "1")
+        assert is_valid_numeric_tag(field, "12")
+        assert is_valid_numeric_tag(field, "123")
+        assert not is_valid_numeric_tag(field, "A1")
+        assert not is_valid_numeric_tag(field, "12A")
+
+    assert is_valid_numeric_tag("track", "5/12")
+    assert is_valid_numeric_tag("disc", "123/456")
+    assert not is_valid_numeric_tag("track_total", "5/12")
+    assert not is_valid_numeric_tag("disc", "5/")
 
 
 def test_supported_extensions_include_target_formats() -> None:

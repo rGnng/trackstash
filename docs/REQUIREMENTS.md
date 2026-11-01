@@ -446,8 +446,10 @@ disc number, disc total, year, original date, genre (multi-value), composer,
 lyricist, comment, lyrics, ISRC, BPM, musical key, compilation flag, sort title,
 sort artist, sort album artist, sort album, MusicBrainz recording/release/artist
 IDs, and artwork references. Track, track total, disc, and disc total are stored
-as text, so values such as `A1` or `Side A` survive where the container supports
-text numbers. Format-specific mappings are defined per codec.
+as text so existing tag values round-trip unchanged. The editor accepts numeric
+values only: single-, two-, and three-digit numbers are accepted, and the track
+and disc fields also accept a `number/total` pair. Format-specific mappings are
+defined per codec.
 
 Optional extended fields are mapped where the container supports them and are
 hidden or disabled otherwise: label, catalog number, barcode, release country,
@@ -464,7 +466,7 @@ segments. Tokens resolve from the edited metadata, not only the on-disk state.
 Unknown tokens are rejected during validation.
 
 The default import and organization template is
-`{album_artist}/{album}/{disc_prefix}{track:02} {title}` (D-18). `{disc_prefix}` expands to `01-` only for multi-disc albums, so disc numbers prefix the track filename instead of creating folders. `{disc_dir}` remains available for templates that prefer a `Disc N/` folder. It is configured in Settings and used by import, organization, and strong ordering. The template field has a Default button that restores the default template and a ? button that opens a copyable variable reference.
+`{album_artist}/{album}/{disc_prefix}{track:02} {title}` (D-18). `{disc_prefix}` expands to `1-`, `10-`, or `100-` whenever a disc number is present, so the filename always carries a `disc-track` prefix without forcing disc numbers to two digits. It is empty when no disc tag exists. `{disc_dir}` remains available for templates that prefer a `Disc N/` folder for multi-disc albums. It is configured in Settings and used by import, organization, and strong ordering. The template field has a Default button that restores the default template and a ? button that opens a copyable variable reference.
 
 ### 7.4 Tracks-compatible identity
 
@@ -789,7 +791,7 @@ to be decided.
 | D-15 | Schema reuse | **Tracks-compatible `libraries`, `artists`, `albums`, and `songs` tables plus `ts_*` extension tables.** |
 | D-16 | Code reuse | **Port/borrow Tracks/WebTracks methods for compatibility** (identity, enumeration, quick/full scan, upsert, missing review, on-demand artwork loading); no runtime dependency on either project. |
 | D-17 | Audio preview | **Not in v1.** No playback or preview is implemented; the decision can be revisited later. |
-| D-18 | Default import template | **`{album_artist}/{album}/{disc_prefix}{track:02} {title}`**, where `{disc_prefix}` adds `01-` before the track number only for multi-disc albums. Configured in Settings and shared by Import, Organize, and strong ordering. |
+| D-18 | Default import template | **`{album_artist}/{album}/{disc_prefix}{track:02} {title}`**, where `{disc_prefix}` adds the disc number (`1-`, `10-`, `100-`) before the track number whenever a disc tag is present. Configured in Settings and shared by Import, Organize, and strong ordering. |
 | D-19 | Default library location | **`~/Music/TrackStash`**, created on first run and changeable in settings. |
 | D-20 | Online metadata | **Not implemented.** TrackStash never performs online metadata lookup; tags come from files, imports, and user edits. |
 | D-21 | Playlist import | **Post-M0.** Importing playlists (M3U/M3U8/PLS and similar) is planned after M0 and is not part of the scaffold; milestone placement is TBD. |

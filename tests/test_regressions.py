@@ -415,8 +415,8 @@ def test_tag_editor_loads_tags_in_one_batch(tmp_path: Path, qtbot: QtBot) -> Non
 
     assert counter[0] <= 1
     dialog._checks["track"].setChecked(True)
-    dialog._lines["track"].setText("A1")
-    assert dialog.edits()["track"] == "A1"
+    dialog._lines["track"].setText("12")
+    assert dialog.edits()["track"] == "12"
 
 
 def test_duplicate_identity_fallback_does_not_raise(tmp_path: Path) -> None:

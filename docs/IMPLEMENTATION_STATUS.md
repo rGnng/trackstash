@@ -37,7 +37,10 @@
   placeholder tile or label.
 - The status bar shows library and selection counts without an app-name prefix,
   defaults to visible, and can be disabled in Settings.
-- Track and disc values are stored as text, matching tag semantics.
+- Track and disc values are stored as text, matching tag semantics. Editor input
+  is numeric and accepts two- and three-digit track/disc numbers.
+- Default organization names use a `disc-track` prefix whenever a disc tag is
+  present; the disc number is not forced to two digits.
 - Window size persists between launches.
 - Album grid sorting defaults to date added descending and is configurable in Settings.
 - Album covers use auto-fill sizing: the grid fits the most columns at a 200 px

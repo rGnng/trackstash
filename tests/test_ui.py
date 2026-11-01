@@ -1296,7 +1296,9 @@ def test_added_column_is_migrated_into_old_column_config(
     assert "added" in window.visible_columns()
 
 
-def test_track_and_disc_accept_text(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
+def test_track_and_disc_require_numeric_values(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
     from PySide6.QtWidgets import QLineEdit
 
     database, _library = _library_with_tracks(tmp_path, audio_factory)
@@ -1310,10 +1312,19 @@ def test_track_and_disc_accept_text(qtbot: QtBot, tmp_path: Path, audio_factory:
     assert isinstance(editor.lines["track"], QLineEdit)
     assert isinstance(editor.lines["disc"], QLineEdit)
     assert not editor.lines["track"].isClearButtonEnabled()
+
+    editor.lines["track"].setText("12")
+    editor.lines["disc"].setText("123")
+    editor._field_changed("track")
+    editor._field_changed("disc")
+    assert editor.save_button.isEnabled() is True
+    assert editor.pending_edits()["track"] == "12"
+    assert editor.pending_edits()["disc"] == "123"
+
     editor.lines["track"].setText("A1")
     editor._field_changed("track")
-    assert editor.save_button.isEnabled() is True
-    assert editor.pending_edits()["track"] == "A1"
+    assert editor.save_button.isEnabled() is False
+    assert "numeric" in editor.pending_label.text().lower()
 
 
 def test_inline_save_refreshes_tracks_once(

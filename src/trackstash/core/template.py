@@ -51,11 +51,15 @@ def _number(value: str) -> int:
     return int(value) if value.isdigit() else 0
 
 
+def _has_disc(value: str) -> bool:
+    """Return whether a disc tag is present and not the "no disc" value."""
+    text = value.strip()
+    return bool(text) and (not text.isdigit() or int(text) > 0)
+
+
 def _token_values(tags: TagSet, metadata: TrackMetadata) -> dict[str, str]:
     multi_disc = _number(tags.disc_total) > 1 or _number(tags.disc) > 1
-    disc_label = tags.disc or "1"
-    if multi_disc and disc_label.isdigit():
-        disc_label = f"{int(disc_label):02}"
+    disc_label = tags.disc.strip()
     return {
         "title": tags.title or "Unknown Title",
         "artist": tags.primary_artist,
@@ -73,7 +77,7 @@ def _token_values(tags: TagSet, metadata: TrackMetadata) -> dict[str, str]:
         "disc": tags.disc,
         "disc_total": tags.disc_total,
         "disc_dir": f"Disc {disc_label}/" if multi_disc else "",
-        "disc_prefix": f"{disc_label}-" if multi_disc else "",
+        "disc_prefix": f"{disc_label}-" if _has_disc(disc_label) else "",
         "format": metadata.format.lower(),
         "bitrate": str(metadata.bitrate),
         "ext": Path(metadata.path).suffix.lstrip("."),

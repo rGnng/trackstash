@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from trackstash.core.db import Track
-from trackstash.core.metadata import TagSet
+from trackstash.core.metadata import TagSet, is_valid_numeric_tag
 
 FIELD_KEYS = (
     "title",
@@ -69,6 +69,7 @@ class TrackInfoEditor(QWidget):
         self._multi_base: dict[str, object] = {}
         self._baseline: dict[str, object] = {}
         self._dirty: set[str] = set()
+        self._invalid: set[str] = set()
         self._loading = False
         self._artwork_pixmap = QPixmap()
         self._has_artwork = False
@@ -411,6 +412,7 @@ class TrackInfoEditor(QWidget):
     def _refresh_dirty(self) -> None:
         if self._track is None and not self._multi_mode:
             self._dirty.clear()
+            self._invalid.clear()
             self.pending_label.setText("")
             self.pending_label.setStyleSheet("color: palette(text);")
             self.save_button.setEnabled(False)
@@ -438,12 +440,18 @@ class TrackInfoEditor(QWidget):
             for key, value in current.items():
                 if value != self._baseline.get(key):
                     dirty.add(key)
+        invalid = {key for key in dirty if not is_valid_numeric_tag(key, current.get(key, ""))}
         self._dirty = dirty
+        self._invalid = invalid
         artwork_dirty = self._pending_artwork is not None or self._pending_artwork_remove
         self._apply_artwork_style()
         for key, widget in self.lines.items():
             caption = self.labels.get(key)
-            if key in dirty:
+            if key in invalid:
+                widget.setStyleSheet("border: 1px solid #D9534F;")
+                if caption is not None:
+                    caption.setStyleSheet("color: #D9534F; font-weight: 600;")
+            elif key in dirty:
                 widget.setStyleSheet("border: 1px solid #D99A3D;")
                 if caption is not None:
                     caption.setStyleSheet("color: #D99A3D; font-weight: 600;")
@@ -451,7 +459,12 @@ class TrackInfoEditor(QWidget):
                 widget.setStyleSheet("")
                 if caption is not None:
                     caption.setStyleSheet("")
-        if dirty or artwork_dirty:
+        if invalid:
+            self.pending_label.setText("Track and disc values must be numeric")
+            self.pending_label.setStyleSheet("color: #D9534F; font-weight: 600;")
+            self.save_button.setEnabled(False)
+            self.revert_button.setEnabled(True)
+        elif dirty or artwork_dirty:
             count = len(dirty) + (1 if artwork_dirty else 0)
             self.pending_label.setText(f"{count} pending change{'s' if count != 1 else ''}")
             self.pending_label.setStyleSheet("color: #D99A3D; font-weight: 600;")
@@ -568,6 +581,8 @@ class TrackInfoEditor(QWidget):
         return self._multi_mode
 
     def _emit_save(self) -> None:
+        if self._invalid:
+            return
         if (self._track is not None or self._multi_mode) and self.has_pending_changes:
             self.save_requested.emit(self.pending_edits())
 
