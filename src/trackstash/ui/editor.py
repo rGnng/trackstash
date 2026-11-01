@@ -124,7 +124,7 @@ class TrackInfoEditor(QWidget):
             block_layout.setContentsMargins(0, 0, 0, 0)
             block_layout.setSpacing(1)
             caption = QLabel(label, block)
-            caption.setStyleSheet("font-size: 11px;")
+            caption.setStyleSheet("")
             self.labels[key] = caption
             line = QLineEdit(block)
             line.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -405,7 +405,7 @@ class TrackInfoEditor(QWidget):
             for widget in self.lines.values():
                 widget.setStyleSheet("")
             for label in self.labels.values():
-                label.setStyleSheet("font-size: 11px;")
+                label.setStyleSheet("")
             return
         current = self.edits()
         dirty: set[str] = set()
@@ -433,11 +433,11 @@ class TrackInfoEditor(QWidget):
             if key in dirty:
                 widget.setStyleSheet("border: 1px solid #D99A3D;")
                 if caption is not None:
-                    caption.setStyleSheet("font-size: 11px; color: #D99A3D; font-weight: 600;")
+                    caption.setStyleSheet("color: #D99A3D; font-weight: 600;")
             else:
                 widget.setStyleSheet("")
                 if caption is not None:
-                    caption.setStyleSheet("font-size: 11px;")
+                    caption.setStyleSheet("")
         if dirty or artwork_dirty:
             count = len(dirty) + (1 if artwork_dirty else 0)
             self.pending_label.setText(f"{count} pending change{'s' if count != 1 else ''}")

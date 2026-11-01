@@ -15,7 +15,7 @@
 | M1 | Complete | Tracks-compatible UUIDs, mutagen tag engine, Tracks-compatible base schema |
 | M2 | Complete | Managed import, quick/full scan, move detection, missing-file handling, search |
 | M3 | Complete | Fusion-styled menu-less Qt browser, single-library status, left media editor, responsive Tracks and Albums views, configurable columns, import wizard |
-| M4 | Complete | Inline single/multi tag editor with pending changes, auto-numbering, previews, verified writes, artwork, journal, undo/redo |
+| M4 | Complete | Inline single/multi tag editor with pending changes, auto-numbering, previews, verified writes, artwork, and journal |
 | M5 | Complete | Template organization, library relocation, UUID remapping, duplicate review, index/Trash deletion |
 | M6 | Complete | Backup/restore, settings, ReKey, PyInstaller app bundle, ad-hoc signed DMG |
 
@@ -32,6 +32,7 @@
 - Track and disc values are stored as text, matching tag semantics.
 - Window size persists between launches.
 - Album grid sorting defaults to date added descending and is configurable in Settings.
+- Import uses one Add Source control, accepts dragged files/folders, and previews automatically.
 - Strong ordering moves files immediately after path-affecting tag edits; mtime preservation is enabled by default.
 - Pending artwork paste/add/delete is normalized and written on Save; all existing artwork is replaced or removed.
 - Artwork supports Crop to square, Fit to square, and Original aspect ratio modes.
@@ -40,7 +41,7 @@
 - Imports copy by default or move on request; sources are untouched in copy mode.
 - Import destinations follow the organization template from Settings; per-import tag overrides remain available.
 - The import dialog accepts folders or individual files and warns before very large imports.
-- Tag edits update files and DB, verify by re-reading, and support undo/redo.
+- Tag edits update files and DB and apply immediately; user-facing undo/redo is removed.
 - Organization recomputes song UUIDs from the new relative paths and remaps all
   references in one transaction.
 - Quick/full scans discover new files, refresh changed files, and detect external
@@ -52,7 +53,7 @@
 Test status at the time of writing:
 
 ```text
-93 passed, 2 skipped (default suite)
+95 passed, 2 skipped (default suite)
 2 passed (real-library integration suite)
 ```
 
@@ -76,8 +77,8 @@ These are documented rather than silently omitted:
 
 - Filesystem watching, saved views, tag presets, automatic organization, and
   batch transforms are not exposed in the UI.
-- Redo covers tag edits, moves, and copy imports; system-Trash deletion is
-  irreversible, and redo of move-imports is not supported.
+- User-facing undo/redo is removed. The journal remains for internal operation
+  audit/crash recovery, but operations apply immediately.
 - Artwork supports front-cover embedding/replacement/removal; multiple artwork
   types and sidecar policies are not exposed.
 - No online metadata lookup, playback/preview, or playlist import.

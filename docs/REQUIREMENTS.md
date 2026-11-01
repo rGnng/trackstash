@@ -26,7 +26,7 @@ unsafe for large batch operations. Collectors need a tool that can:
 
 - index a large library without re-reading every file on each launch;
 - import external files into a managed library and organize them by their tags;
-- apply tag changes to hundreds of tracks with a clear preview and a reliable undo;
+- apply tag changes to hundreds of tracks with a clear preview and immediate writes;
 - enforce a consistent folder and filename structure;
 - work entirely offline, with no cloud dependency or vendor lock-in.
 
@@ -54,10 +54,10 @@ unsafe for large batch operations. Collectors need a tool that can:
 
 - **G-1** Scan one or more library roots and maintain an incremental index.
 - **G-2** Read, edit, and write embedded tags for the core audio formats.
-- **G-3** Support batch editing with preview, progress, cancellation, and undo.
+- **G-3** Support batch editing with preview, progress, and cancellation.
 - **G-4** Manage embedded and sidecar artwork.
 - **G-5** Rename and move files using user-defined templates, with collision
-  detection and undo.
+  detection.
 - **G-6** Provide fast search, filtering, and saved views.
 - **G-7** Detect exact and probable duplicates without ever deleting automatically.
 - **G-8** Keep the core engine independent of the UI so that a CLI and future
@@ -67,7 +67,7 @@ unsafe for large batch operations. Collectors need a tool that can:
 - **G-10** Generate core UUIDs with the Tracks/WebTracks deterministic algorithm
   and keep references consistent when paths change.
 - **G-11** Remove tracks from the index or move their files to the macOS Trash,
-  with explicit confirmation and honest undo semantics.
+  with explicit confirmation.
 
 ### 2.2 Non-goals for v1
 
@@ -110,7 +110,7 @@ unsafe for large batch operations. Collectors need a tool that can:
   genre, and cover art for all tracks in one batch, previews the diff, and saves.
 - **S-3 Large batch edit.** The user selects 800 tracks, sets a comment, clears a
   custom field, and renumbers tracks per disc; the operation is previewed and can
-  be undone as a single unit.
+  be applied as a single unit.
 - **S-4 Reorganization.** The user applies the template
   `{album_artist}/{year} - {album}/{disc}-{track:02} {title}` to a selection,
   reviews collisions, and executes the move.
@@ -209,7 +209,7 @@ Priorities: **P0** = required for v1, **P1** = expected for v1, **P2** = later.
 | TAG-04 | P0 | Saving MUST present a diff preview of affected files and fields before writing. |
 | TAG-05 | P0 | Tag writes MUST preserve the audio stream and all untouched tags, including unknown fields, where the format supports it. When preservation is not possible, the preview MUST warn and require explicit confirmation. |
 | TAG-06 | P0 | A tag write MUST be verified by re-reading the file after saving. Failures MUST be reported per file. |
-| TAG-07 | P0 | Every write operation MUST be journaled and undoable as a unit (see SAFE-01). |
+| TAG-07 | P0 | Every write operation MUST be journaled and applied immediately as a unit (see SAFE-01). |
 | TAG-08 | P1 | The user SHOULD be able to copy tags from one track and paste selected fields onto others. |
 | TAG-09 | P1 | The application SHOULD provide auto-numbering for track and disc fields within a selection. |
 | TAG-10 | P1 | The application SHOULD provide text transforms: trim whitespace, collapse spaces, title case, find/replace, and regular-expression replace. |
@@ -243,12 +243,12 @@ Priorities: **P0** = required for v1, **P1** = expected for v1, **P2** = later.
 | ORG-03 | P0 | Paths MUST be sanitized for the host OS, including reserved names, illegal characters, and length limits. |
 | ORG-04 | P0 | Collisions MUST be detected and resolved by skip, auto-suffix, or an explicitly confirmed overwrite. Detection MUST be case-insensitive on case-insensitive filesystems. Silent overwrite is forbidden. |
 | ORG-05 | P0 | A dry-run mode MUST be available for every organization operation. |
-| ORG-06 | P0 | Moves MUST be journaled and undoable. When a move changes a song's library-relative path, its UUID MUST be recomputed and every reference MUST be remapped in the same transaction. |
+| ORG-06 | P0 | Moves MUST be journaled. When a move changes a song's library-relative path, its UUID MUST be recomputed and every reference MUST be remapped in the same transaction. |
 | ORG-07 | P1 | The user SHOULD be able to copy instead of move, and to move tracks between libraries. |
 | ORG-08 | P1 | Empty source folders SHOULD be removed only when the user enables that option. |
 | ORG-09 | P2 | An inbox workflow MAY import new files into the library and apply a template in one step. |
 | ORG-10 | P0 | The application MUST refuse to move files outside configured library roots unless the user explicitly confirms. |
-| ORG-11 | P1 | Automatic organization MAY be enabled per library. When enabled, tag edits that change the destination MUST include the move, ID remap, and undo in the same preview and operation; when disabled, organization is a separate action. |
+| ORG-11 | P1 | Automatic organization MAY be enabled per library. When enabled, tag edits that change the destination MUST include the move, ID remap, in the same preview and operation; when disabled, organization is a separate action. |
 
 ### 5.6 Search, browsing, and views
 
@@ -280,13 +280,13 @@ Priorities: **P0** = required for v1, **P1** = expected for v1, **P2** = later.
 | ID | Priority | Requirement |
 |---|---|---|
 | SAFE-01 | P0 | Every write operation MUST create a journal entry containing the prior tag state (including artwork) and the prior path for each affected file. |
-| SAFE-02 | P0 | The last *N* reversible operations (configurable retention, default 50) MUST be undoable, and undo/redo history MUST survive application restarts. Redo MUST be available for undone operations until a new edit occurs. |
+| SAFE-02 | P0 | User-facing undo/redo MUST NOT be exposed; operations apply immediately. The operation journal remains internal for audit and crash recovery. |
 | SAFE-03 | P0 | If the application crashes mid-operation, the next launch MUST detect the incomplete journal and offer recovery or rollback. |
-| SAFE-04 | P0 | Batch operations MUST support cancellation. Files already completed remain journaled and undoable. |
+| SAFE-04 | P0 | Batch operations MUST support cancellation. Files already completed remain journaled. |
 | SAFE-05 | P0 | Full-file backups MUST be optional per operation; tag snapshots are always stored. |
 | SAFE-06 | P0 | The application MUST make no network requests by default. |
-| SAFE-07 | P1 | Undo MUST verify that target files still match the journaled state; if a file changed or is missing, the operation MUST stop and report the conflict. |
-| SAFE-08 | P0 | Index-only deletions MUST be undoable. File deletions moved to the system Trash MUST be labeled irreversible inside the application. |
+| SAFE-07 | P1 | Journaled state MUST be sufficient to audit an operation when a file changed or is missing. |
+| SAFE-08 | P0 | File deletions moved to the system Trash MUST be labeled irreversible inside the application. |
 | SAFE-09 | P0 | Every UUID remap MUST record enough prior state in the operation journal (path, names, namespace) to audit and reverse it. No long-term alias table or old-ID index is retained. |
 
 ### 5.9 Command-line interface (post-v1)
@@ -326,7 +326,7 @@ refactoring. Priorities below are relative to the post-v1 phase.
 | IMP-04 | P0 | Only fields explicitly edited by the user are written to the imported file, after it reaches its destination. Untouched tags MUST be preserved. |
 | IMP-05 | P0 | Destination paths MUST be derived from a configurable tag template, with a live per-file preview. |
 | IMP-06 | P0 | Collisions and duplicates MUST be detected before copying. The user chooses skip, keep both, or replace; silent overwrite is forbidden. Replace MUST back up the existing destination first. |
-| IMP-07 | P0 | Import MUST be journaled and cancellable. Undo removes files copied by the operation and restores files moved by it. |
+| IMP-07 | P0 | Import MUST be journaled and cancellable. |
 | IMP-08 | P0 | After copy or move and optional tag writing, the importer MUST index the file with a Tracks-compatible UUID derived from its final library-relative path. |
 | IMP-09 | P1 | Imports MUST report per-file progress and errors, and MUST leave the source untouched when a file fails before the copy commits. |
 | IMP-10 | P0 | The importer MUST NOT follow symlinks that escape the selected source or the target library root. |
@@ -346,7 +346,7 @@ refactoring. Priorities below are relative to the post-v1 phase.
 | UPD-05 | P0 | Organization after tag edits MUST move the file, rewrite the path, recompute IDs, and remap references in the same transaction. |
 | UPD-06 | P0 | If a file changed on disk since indexing, the update MUST warn and re-read the current tags before overwriting them. |
 | UPD-07 | P0 | Missing files MUST be reviewed; only explicitly selected rows are removed, and a scan MUST NOT delete files. |
-| UPD-08 | P0 | Batch updates MUST be cancellable; completed files remain journaled and undoable. |
+| UPD-08 | P0 | Batch updates MUST be cancellable; completed files remain journaled. |
 | UPD-09 | P1 | ReKey MUST recompute the namespace and all core IDs, remap references, and back up the database before writing. |
 | UPD-10 | P1 | When an artist or album identity changes into an existing row, the rows MUST merge deterministically: the existing row wins, songs are reassigned, and orphan albums, artists, and `ts_artwork` rows are cleaned up. |
 
@@ -356,7 +356,7 @@ refactoring. Priorities below are relative to the post-v1 phase.
 |---|---|---|
 | DEL-01 | P0 | Deleting a track from the library removes its index rows by default; the file remains on disk. |
 | DEL-02 | P0 | The user MAY choose to move the file to the macOS Trash as part of deletion; this requires a separate explicit confirmation. |
-| DEL-03 | P0 | File deletion via the system Trash is NOT undoable within the application and the confirmation MUST state this. Index-only deletion MUST be undoable. |
+| DEL-03 | P0 | File deletion via the system Trash is NOT reversible within the application and the confirmation MUST state this. |
 | DEL-04 | P0 | The deletion preview MUST list affected tracks, file sizes, and whether files will be trashed. |
 | DEL-05 | P0 | Deleting a library MUST remove only its index rows; files are never touched. |
 | DEL-06 | P1 | Orphan albums, artists, and `ts_artwork` rows SHOULD be cleaned up after index deletion. |
@@ -557,7 +557,7 @@ Unsupported files are never modified.
   while they have keyboard focus, so scrolling the page cannot alter values.
 - **Strong ordering:** tag edits that change the destination path MUST move the
   file immediately using the organization template; the move is journaled
-  separately so it can be undone. Enabled by default.
+  separately for audit. Enabled by default.
 - **Mtime preservation:** tag and artwork edits to indexed files MUST preserve
   the original modification time by default; configurable in Settings.
 - **Media editor (left):** selectable artwork, editable canonical tags,
@@ -567,18 +567,20 @@ Unsupported files are never modified.
   from an image file, or deleted with Delete/Backspace; a selected artwork area
   supports Add/Paste/Delete in its context menu. Pending artwork is normalized
   and embedded on Save, replacing all existing artwork.
-- **Action bar:** no main menu bar. Import, undo/redo, refresh, format, artwork
+- **Action bar:** no main menu bar. Import, refresh, format, artwork
   filtering, view switching, and Settings live in the top bar.
 - **Import:** a top-bar Import… button. Library identity, scans, adding libraries,
   relocation, ReKey, enable/disable, and removal live directly in the
   Settings → Library panel.
 - **Albums view:** multi-select with drag or ⌘-click for batch tag editing.
   `Cmd+[` / `Ctrl+[` returns from a filtered album view to the Albums grid.
+  Import uses one Add Source control, accepts dragged files/folders, and previews
+  automatically after a source is selected.
 - **Track context menu:** Edit Tags, Go to Album, Open, Open with, Delete, and
   Show in Finder.
 - **Import wizard:** source picker, tag preview/edit, copy or move mode, destination
   preview using the organization template from Settings, collision and duplicate
-  handling, per-file progress, and undo.
+  handling, and per-file progress.
 - **Batch editor:** tri-state fields, mixed-value indicators, transform actions,
   auto-numbering, and a diff preview before saving.
 - **Preview dialog:** per-file before/after values, path changes, old and new
@@ -589,11 +591,10 @@ Unsupported files are never modified.
 - **Settings → Library:** embedded library selector, identity and namespace,
   Quick/Full Scan, relocation, ReKey, enable/disable, and removal.
 - **Progress center:** running and completed operations, cancellable, with a
-  per-file error list and an undo action where the operation is reversible.
+  per-file error list.
 
 Primary flows: first-run setup → import or scan → browse → edit → preview → save →
-organize/move or delete → undo where reversible. Every destructive action states
-whether it can be undone and is reachable from the keyboard.
+organize/move or delete. Every destructive action is reachable from the keyboard.
 
 ---
 
@@ -613,10 +614,10 @@ TrackStash is a native desktop application built with Python 3.12+ and PySide6
   against drift; there is no runtime dependency on either project.
 - **Managed importer (`src/trackstash/core/importing`):** reads tags, accepts
   wizard edits, plans tag-driven destinations, copies or moves files, writes only
-  user-edited fields, indexes the result, and journals the operation for undo.
+  user-edited fields, indexes the result, and journals the operation.
 - **Identity and remapping service (`src/trackstash/core/identity`):** computes
   library, artist, album, and song IDs, recomputes them after path or name
-  changes, records the prior path/name/namespace needed for undo, and remaps every
+  changes, records the prior path/name/namespace needed for audit, and remaps every
   reference in one SQLite transaction.
 - **Desktop UI (`src/trackstash/ui`):** PySide6 Widgets. `QMainWindow` shell, a
   SQL-backed `QAbstractTableModel` with a bounded row cache, custom delegates, and
@@ -661,8 +662,8 @@ TrackStash is a native desktop application built with Python 3.12+ and PySide6
   Fit to square, or Original aspect ratio before embedding.
 - **Safety:** the journal records prior tag state, artwork, paths, and IDs before
   any mutation. Imports, moves, organization, tag writes, and index deletions are
-  journaled. Index-only deletes are undoable; files moved to the macOS Trash are
-  explicitly not app-undoable. Optional full-file backups are configurable.
+  journaled. Files moved to the macOS Trash are explicitly not reversible within
+  the app. Optional full-file backups are configurable.
   Startup recovery detects incomplete operations and offers rollback.
 - **Packaging:** `pyproject.toml` with `uv` and a committed `uv.lock`. PySide6 is
   pinned to 6.11.3, whose macOS wheel targets macOS 13; PySide6 6.12+ requires
@@ -671,7 +672,7 @@ TrackStash is a native desktop application built with Python 3.12+ and PySide6
   Windows/Linux builds follow with the ports.
 - **Testing:** `pytest` for core tests, `pytest-qt` for UI tests, fixture-based
   round-trip tests for every supported format, Tracks/WebTracks UUID reference
-  vectors, fixture databases for scan/upsert, import and undo scenarios, a
+  vectors, fixture databases for scan/upsert and import scenarios, a
   generated 10,000-file benchmark library, and `ruff` plus `mypy` in CI.
 
 ### Repository layout (proposed)
@@ -709,8 +710,8 @@ trackstash/
 | **M1** | Identity and metadata engine | Tracks-compatible UUID reference vectors pass; canonical mapping and mutagen adapters; FLAC/MP3/M4A/OGG/Opus plus APE/WavPack read/write round-trip tests pass; base schema and `ts_*` extensions created; unknown tags and artwork survive where supported; tag snapshots and diffs work. |
 | **M2** | Managed library, import, and scan | Import pipeline with tag-driven destinations, copy/move, duplicate and collision handling, journaling; SQLite upsert; quick/full scan; missing review; FTS5 search; a generated 10,000-file library imports and rescans correctly. |
 | **M3** | Desktop browsing and import wizard | Library sidebar, SQL-backed virtualized track table, detail panel, search, filters, and the import wizard work on a real library without editing. |
-| **M4** | Editing, artwork, update, and history | Single and batch edits with tri-state fields, preview, verified writes, artwork management, journal, undo/redo, update/rescan, and cancellation; crash recovery test passes. |
-| **M5** | Organization, deletion, and duplicates | Template moves with live preview, UUID remapping, collision handling, index-only and system-Trash deletion, exact and probable duplicate review; reversible operations are undoable. |
+| **M4** | Editing, artwork, update, and history | Single and batch edits with tri-state fields, preview, verified writes, artwork management, journal, update/rescan, and cancellation; crash recovery test passes. |
+| **M5** | Organization, deletion, and duplicates | Template moves with live preview, UUID remapping, collision handling, index-only and system-Trash deletion, exact and probable duplicate review; operations apply immediately. |
 | **M6** | Hardening and release | Watcher, accessibility pass, performance tuning, onboarding, documentation, diagnostics, and a signed/notarized PyInstaller DMG with corresponding source. |
 
 ### 11.1 v1 acceptance criteria
@@ -718,9 +719,9 @@ trackstash/
 | ID | Criterion |
 |---|---|
 | AC-01 | Scan a 10,000-file mixed-format library, cancel mid-scan, and resume; counts and the error list are correct, and no file is modified. |
-| AC-02 | Apply a five-field batch edit to 500 tracks; the preview shows per-file diffs; cancel halfway; completed files remain journaled; undo restores every tag. |
+| AC-02 | Apply a five-field batch edit to 500 tracks; the preview shows per-file diffs; cancel halfway; completed files remain journaled; no user-facing undo is offered. |
 | AC-03 | Round-trip tags and artwork on FLAC, MP3, M4A, OGG, Opus, APE, and WavPack fixtures; unknown fields survive or a warning is shown; the audio stream checksum is unchanged. |
-| AC-04 | Organize 1,000 tracks with a template; collisions are reported and resolved; undo restores the original paths. |
+| AC-04 | Organize 1,000 tracks with a template; collisions are reported and resolved; paths and IDs are updated in place. |
 | AC-05 | Duplicate review finds exact duplicates by hash and probable duplicates by tags; removal moves files to the macOS Trash or removes them from the index, and never deletes automatically. |
 | AC-06 | Kill the application during a batch write; on restart, recovery offers rollback and the library opens in a consistent state. |
 | AC-07 | Disconnect an external library root; its tracks are marked offline; reconnect and rescan without data loss. |
@@ -728,9 +729,9 @@ trackstash/
 | AC-09 | Cached search and filtering respond within 100 ms at p95 for 100,000 tracks; an initial 10,000-file scan completes within 3 minutes on an SSD. |
 | AC-10 | The published source archive matches the DMG version, builds from a clean checkout with `uv`, and produces a launchable application. |
 | AC-11 | UUID tests reproduce Tracks/WebTracks reference vectors for library, song, artist, and album IDs, including the `I.M-P.U.L.S.Σ` lowercasing case and non-ASCII paths. |
-| AC-12 | Import 100 files from an external folder with copy mode; the source is untouched, destinations follow the tag template, every song ID matches the formula for its final relative path, and undo removes the copies. |
-| AC-13 | Move or rename 100 indexed tracks; every song ID is recomputed, all references are updated, no orphan rows remain, and undo restores the prior paths and IDs. |
-| AC-14 | Delete 20 tracks index-only and undo restores them; delete 20 tracks with system Trash and the dialog states that file deletion is irreversible. |
+| AC-12 | Import 100 files from an external folder with copy mode; the source is untouched, destinations follow the tag template, and every song ID matches the formula for its final relative path. |
+| AC-13 | Move or rename 100 indexed tracks; every song ID is recomputed, all references are updated, and no orphan rows remain. |
+| AC-14 | Delete 20 tracks index-only; delete 20 tracks with system Trash and the dialog states that file deletion is irreversible. |
 | AC-15 | Quick Scan discovers new files, Full Scan refreshes changed files, and missing files are removed only after explicit selection. |
 | AC-16 | Import with one edited tag writes only that field, preserves every untouched tag, and leaves the source file unchanged in copy mode. |
 | AC-17 | TrackStash creates and writes only its own database; a Tracks/WebTracks `library.sqlite` is never opened or modified. |
@@ -759,13 +760,13 @@ to be decided.
 | D-02 | Primary delivery form | **Native desktop GUI.** A CLI follows after v1 using the same core. |
 | D-03 | UI framework | **Qt 6 Widgets via PySide6.** Widgets suit data-dense tables and batch workflows better than QML. |
 | D-04 | Implementation stack | **Python 3.12+ + PySide6 + mutagen + SQLite.** Swift/AppKit was rejected because portability to Windows/Linux is a stated requirement. |
-| D-05 | v1 scope depth | **Full library management:** scan, tags, artwork, organization, duplicates, and undo, delivered by milestone. |
+| D-05 | v1 scope depth | **Full library management:** scan, tags, artwork, organization, and duplicates, delivered by milestone. |
 | D-06 | Initial platforms | **macOS only for v1**, with all non-UI code portable and platform services isolated. |
 | D-07 | Tag engine and license | **PySide6 + mutagen, application GPL-3.0-only.** Chosen for development speed and mutagen's mature format coverage; the copyleft obligation is accepted. Qt C++ + TagLib remains the alternative for MIT/closed-source distribution. |
 | D-08 | Distribution channel | **Direct signed and notarized DMG**, not the Mac App Store, to avoid sandbox restrictions on arbitrary library roots. |
 | D-09 | Minimum macOS version | **macOS 13+.** PySide6 is pinned to 6.11.3, whose wheel targets macOS 13; PySide6 6.12+ targets macOS 14+. |
 | D-10 | Python toolchain | **Python 3.12+, managed with `uv`.** Dependencies are pinned in `uv.lock`; PySide6 6.11.3 is a direct pin. |
-| D-11 | Identity compatibility | **Tracks/WebTracks UUID formulas.** Song IDs are recomputed whenever the relative path changes, all references are remapped transactionally, and only the prior state needed for undo is kept in the operation journal. |
+| D-11 | Identity compatibility | **Tracks/WebTracks UUID formulas.** Song IDs are recomputed whenever the relative path changes, all references are remapped transactionally, and the prior state needed for audit is kept in the operation journal. |
 | D-12 | Existing databases | **New TrackStash database only.** Tracks/WebTracks databases are never opened, migrated, or modified. |
 | D-13 | Import model | **Managed library.** Copy is the default, move is optional, destinations are tag-driven, and only fields edited in the import wizard are written to files. |
 | D-14 | Deletion model | **Index-only by default.** Moving files to the macOS Trash is optional and explicitly irreversible inside the application. |
@@ -813,12 +814,12 @@ None. All decisions are resolved.
 | R-05 | External or network volumes may be slow or disappear during a scan. | Offline state, cancellable scans, bounded concurrency, and no automatic deletion. |
 | R-06 | Prebuilt PySide6 wheels or the Python runtime may require a newer macOS than the 13.0 deployment target. | Pin PySide6 6.11.3, verify the wheel tag and `LC_BUILD_VERSION` with `otool`, and test on a macOS 13 machine. |
 | R-07 | PyInstaller bundling and notarization add failure modes. | One-folder `.app`, automated build script, hardened runtime, notarization verification, and a clean-machine smoke test. |
-| R-08 | Path-based song UUIDs change on every move, breaking external links and references. | Recompute and remap transactionally; record the prior path/name/namespace for undo; show old and new IDs in the preview; warn that external links may break. |
+| R-08 | Path-based song UUIDs change on every move, breaking external links and references. | Recompute and remap transactionally; record the prior path/name/namespace for audit; show old and new IDs in the preview; warn that external links may break. |
 | R-09 | The ported identity or scan rules drift from Tracks/WebTracks. | Reference-vector tests, fixture databases, and a compatibility document; no runtime dependency on either project. |
 | R-10 | Import copy/move can lose or corrupt files. | Copy by default, leave the source untouched until commit, journal every file, preview destinations, and verify after write. |
-| R-11 | System Trash deletion is not app-undoable. | Index-only is the default; require a separate confirmation and state clearly that file deletion cannot be undone in the app. |
+| R-11 | Deletion is irreversible from the app. | Index-only is the default; require a separate confirmation and state clearly that file deletion cannot be undone in the app. |
 | R-12 | Mutagen metadata mappings differ from Tracks' AVFoundation/ffprobe behavior. | Canonical mapping tests per format; compare against reference metadata for common tags; surface parse warnings. |
-| R-13 | A template change can move thousands of files and churn IDs. | Preview the full batch, show ID changes, require confirmation, journal in chunks, and support cancel/undo. |
+| R-13 | A template change can move thousands of files and churn IDs. | Preview the full batch, show ID changes, require confirmation, journal in chunks, and support cancellation. |
 | R-14 | Ported Tracks/WebTracks code may have unclear provenance. | Confirm copyright ownership before porting, record provenance, and relicense under GPL-3.0 with attribution. |
 
 ---

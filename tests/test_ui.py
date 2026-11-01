@@ -80,14 +80,35 @@ def test_import_dialog_preview(qtbot: QtBot, tmp_path: Path, audio_factory: Path
     dialog = ImportDialog(service, library)
     qtbot.addWidget(dialog)
     assert not hasattr(dialog, "template_edit")
-    dialog.source_edit.setText(str(incoming))
-    dialog.preview()
+    assert not hasattr(dialog, "preview_button")
+    assert dialog.source_button.text() == "Add Source…"
+    assert [action.text() for action in dialog.source_button.menu().actions()] == [
+        "Files…",
+        "Folder…",
+    ]
+    dialog.set_sources([str(incoming)])
     assert dialog.table.rowCount() == 1
     assert dialog.import_button.isEnabled()
     assert dialog.plan is not None
     assert dialog.plan.items[0].destination == (
         Path(library.path) / "UI Artist" / "UI Album" / "Second Song.mp3"
     )
+
+
+def test_import_dialog_auto_previews_constructor_sources(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    service = LibraryService(database)
+    incoming = tmp_path / "Auto Preview"
+    incoming.mkdir()
+    shutil.copy2(audio_factory / "sample.mp3", incoming / "sample.mp3")
+    dialog = ImportDialog(service, library, sources=[str(incoming)])
+    qtbot.addWidget(dialog)
+    qtbot.wait(20)
+    assert dialog.plan is not None
+    assert dialog.table.rowCount() == 1
+    assert dialog.import_button.isEnabled()
 
 
 def test_single_track_tag_editor(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
@@ -122,8 +143,7 @@ def test_import_dialog_execute(
     )
     dialog = ImportDialog(service, library)
     qtbot.addWidget(dialog)
-    dialog.source_edit.setText(str(incoming))
-    dialog.preview()
+    dialog.set_sources([str(incoming)])
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
     dialog.execute()
     assert dialog.import_result is not None
@@ -192,6 +212,33 @@ def test_album_grid_loads_cover_only_on_decoration(
     decoration = model.data(index, Qt.ItemDataRole.DecorationRole)
     assert len(model._icons) == 1
     assert decoration is not None
+
+
+def test_import_dialog_accepts_dropped_folder(
+    qtbot: QtBot, tmp_path: Path, audio_factory: Path
+) -> None:
+    from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PySide6.QtGui import QDropEvent
+
+    database, library = _library_with_tracks(tmp_path, audio_factory)
+    service = LibraryService(database)
+    incoming = tmp_path / "Dropped"
+    incoming.mkdir()
+    shutil.copy2(audio_factory / "sample.mp3", incoming / "sample.mp3")
+    dialog = ImportDialog(service, library)
+    qtbot.addWidget(dialog)
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(incoming))])
+    event = QDropEvent(
+        QPointF(10, 10),
+        Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    dialog.dropEvent(event)
+    assert dialog.plan is not None
+    assert dialog.table.rowCount() == 1
 
 
 def test_track_column_layout_round_trip(qtbot: QtBot, tmp_path: Path, audio_factory: Path) -> None:
@@ -287,8 +334,6 @@ def test_qt_top_bar_replaces_menu(qtbot: QtBot, tmp_path: Path) -> None:
     assert window.import_button.text() == "Import…"
     assert window.format_filter.currentText() == "All formats"
     assert window.missing_artwork_button.text() == "No artwork"
-    assert window.undo_button.text() == "Undo"
-    assert window.redo_button.text() == "Redo"
     assert window.settings_button.toolTip() == "Settings…"
     assert window.refresh_button.toolTip() == "Refresh (Ctrl+R)"
     assert not hasattr(window, "filters_button")

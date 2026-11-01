@@ -8,7 +8,7 @@ consistent without cloud dependencies.
 ![TrackStash library browser](docs/screenshot.png)
 
 > **Status:** M6 implementation. Core managed-library, import, tag editing,
-> artwork, organization, duplicate review, deletion, and undo workflows are
+> artwork, organization, duplicate review, and deletion workflows are
 > implemented. The app is not yet notarized for public distribution.
 
 ## Features
@@ -52,16 +52,16 @@ consistent without cloud dependencies.
   disk cover cache. New artwork is normalized to JPEG with Crop to square,
   Fit to square, or Original aspect ratio modes.
 - **Organization.** Rename and move files with a token template, live preview,
-  collision detection, UUID remapping, journaling, and undo. Strong ordering is
-  on by default: tag changes that affect the destination move the file
-  immediately, and the move is journaled separately for undo.
+  collision detection, UUID remapping, and journaling. Strong ordering is on by
+  default: tag changes that affect the destination move the file immediately.
 - **Editing safety.** File modification times are preserved by default when
   editing indexed files. Both strong ordering and mtime preservation can be
   changed in Settings.
+- **Import.** A single Add Source control supports files or folders, accepts
+  drag-and-drop into the import window, and previews automatically as soon as a
+  source is chosen.
 - **Library maintenance.** Quick and full scans, changed-file refresh, missing
   file review, duplicate review, and index-only or system-Trash deletion.
-- **Undo and redo.** Journaled tag edits, imports, moves, and index-only
-  deletions. Redo is available for tag edits, moves, and copy imports.
 - **Local-first.** No online metadata lookup, telemetry, accounts, or cloud
   services. No playback or preview in v1.
 
@@ -148,7 +148,7 @@ src/trackstash/
     identity/            Tracks-compatible UUID generation
     metadata.py          mutagen read/write and canonical tags
     db.py                SQLite schema, upserts, journal, search
-    library.py           import, scan, edit, organize, delete, undo
+    library.py           import, scan, edit, organize, delete
     template.py          tag-driven path templates and sanitization
     compat/              compatibility notes and future shared helpers
   ui/                    PySide6 window, dialogs, table model
@@ -164,8 +164,8 @@ packaging/macos/         PyInstaller spec and DMG build script
 - Playlist import is planned after M0 and is not implemented.
 - Filesystem watching, saved views, tag presets, and automatic organization
   are not yet exposed in the UI.
-- Redo is supported for tag edits, moves, and copy imports; system-Trash file
-  deletion remains irreversible.
+- User-facing undo/redo is removed; operations apply immediately. System-Trash
+  file deletion remains irreversible.
 - The release DMG is ad-hoc signed, not notarized.
 
 ## Documentation

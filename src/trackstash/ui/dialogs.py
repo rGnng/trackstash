@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -20,12 +21,14 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
     QRadioButton,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -257,6 +260,7 @@ class ImportDialog(QDialog):
         service: LibraryService,
         library: Library,
         parent: QWidget | None = None,
+        sources: Sequence[str] | None = None,
     ) -> None:
         super().__init__(parent)
         self.service = service
@@ -267,20 +271,25 @@ class ImportDialog(QDialog):
         self._sources: list[str] = []
         self.setWindowTitle(f"Import into {library.name}")
         self.resize(960, 560)
+        self.setAcceptDrops(True)
 
         layout = QVBoxLayout(self)
         source_row = QHBoxLayout()
         self.source_edit = QLineEdit(self)
-        self.source_edit.setPlaceholderText("Folder or files to import")
-        self.source_edit.textEdited.connect(self._source_edited)
-        browse = QPushButton("Folder…", self)
-        browse.clicked.connect(self._browse)
-        browse_files = QPushButton("Files…", self)
-        browse_files.clicked.connect(self._browse_files)
+        self.source_edit.setReadOnly(True)
+        self.source_edit.setPlaceholderText("Drag files or folders here, or use Add Source…")
+        self.source_button = QToolButton(self)
+        self.source_button.setText("Add Source…")
+        self.source_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        source_menu = QMenu(self.source_button)
+        files_action = source_menu.addAction("Files…")
+        files_action.triggered.connect(self._browse_files)
+        folder_action = source_menu.addAction("Folder…")
+        folder_action.triggered.connect(self._browse)
+        self.source_button.setMenu(source_menu)
         source_row.addWidget(QLabel("Source", self))
         source_row.addWidget(self.source_edit, 1)
-        source_row.addWidget(browse)
-        source_row.addWidget(browse_files)
+        source_row.addWidget(self.source_button)
         layout.addLayout(source_row)
 
         options = QHBoxLayout()
@@ -289,14 +298,14 @@ class ImportDialog(QDialog):
         self.mode_combo = NoWheelComboBox(self)
         self.mode_combo.addItem("Copy (recommended)", "copy")
         self.mode_combo.addItem("Move", "move")
-        self.mode_combo.currentIndexChanged.connect(self._invalidate_plan)
+        self.mode_combo.currentIndexChanged.connect(self._options_changed)
         options.addWidget(self.mode_combo)
         options.addWidget(QLabel("Duplicates", self))
         self.duplicate_combo = NoWheelComboBox(self)
         self.duplicate_combo.addItem("Skip", "skip")
         self.duplicate_combo.addItem("Keep both", "keep")
         self.duplicate_combo.addItem("Replace", "replace")
-        self.duplicate_combo.currentIndexChanged.connect(self._invalidate_plan)
+        self.duplicate_combo.currentIndexChanged.connect(self._options_changed)
         options.addWidget(self.duplicate_combo)
         options.addStretch(1)
         overrides = QPushButton("Tag overrides…", self)
@@ -310,32 +319,64 @@ class ImportDialog(QDialog):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self.table, 1)
 
-        self.status = QLabel("Choose a source and preview the import.", self)
+        self.status = QLabel(
+            "Drag files or folders here, or use Add Source to preview automatically.",
+            self,
+        )
         layout.addWidget(self.status)
 
         buttons = QHBoxLayout()
-        self.preview_button = QPushButton("Preview", self)
-        self.preview_button.clicked.connect(self.preview)
         self.import_button = QPushButton("Import", self)
         self.import_button.setEnabled(False)
         self.import_button.clicked.connect(self.execute)
         cancel = QPushButton("Cancel", self)
         cancel.clicked.connect(self.reject)
-        buttons.addWidget(self.preview_button)
         buttons.addWidget(self.import_button)
         buttons.addStretch(1)
         buttons.addWidget(cancel)
         layout.addLayout(buttons)
 
+        if sources:
+            QTimer.singleShot(0, lambda: self.set_sources(list(sources)))
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        if paths:
+            self.set_sources(paths)
+            event.acceptProposedAction()
+
+    def set_sources(self, sources: Sequence[str | Path]) -> None:
+        self._sources = [str(source) for source in sources if str(source)]
+        if not self._sources:
+            self.source_edit.clear()
+            self._invalidate_plan()
+            self.status.setText(
+                "Drag files or folders here, or use Add Source to preview automatically."
+            )
+            return
+        if len(self._sources) == 1:
+            self.source_edit.setText(self._sources[0])
+        else:
+            self.source_edit.setText(f"{len(self._sources)} sources selected")
+        self.preview()
+
     def _browse(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose a folder to import")
         if folder:
-            self._sources = [folder]
-            self.source_edit.setText(folder)
+            self.set_sources([folder])
 
-    def _source_edited(self, _text: str) -> None:
-        self._sources = []
+    def _options_changed(self, *_args: object) -> None:
         self._invalidate_plan()
+        if self._sources:
+            self.preview()
 
     def _invalidate_plan(self, *_args: object) -> None:
         self.plan = None
@@ -351,22 +392,23 @@ class ImportDialog(QDialog):
             "*.aif *.ape *.wv *.dsf *.dff)",
         )
         if files:
-            self._sources = list(files)
-            self.source_edit.setText(f"{len(files)} files selected")
+            self.set_sources(files)
 
     def _edit_overrides(self) -> None:
         dialog = BulkImportEditDialog(self)
         if dialog.exec():
             self.common_edits = dialog.edits()
-            self.plan = None
-            self.import_button.setEnabled(False)
-            self.status.setText("Tag overrides changed; preview again.")
+            self._invalidate_plan()
+            self.status.setText("Tag overrides changed; previewing…")
+            if self._sources:
+                self.preview()
 
     def preview(self) -> None:
-        source = self.source_edit.text().strip()
-        sources = self._sources or ([source] if source else [])
+        sources = self._sources
         if not sources:
-            QMessageBox.warning(self, "Import", "Choose a source to import.")
+            self.status.setText(
+                "Drag files or folders here, or use Add Source to preview automatically."
+            )
             return
         try:
             files: list[Path] = []
@@ -414,7 +456,11 @@ class ImportDialog(QDialog):
         self.import_button.setEnabled(
             bool(plan.items) and any(item.action != "skip" for item in plan.items)
         )
-        self.status.setText(f"{len(plan.items)} files planned, {len(plan.errors)} errors.")
+        file_count = len(plan.items)
+        error_count = len(plan.errors)
+        file_word = "file" if file_count == 1 else "files"
+        error_word = "error" if error_count == 1 else "errors"
+        self.status.setText(f"{file_count} {file_word} planned, {error_count} {error_word}.")
 
     def _progress(self, phase: str, current: int, total: int, message: str) -> None:
         suffix = f" {current}/{total}" if total else ""
@@ -540,13 +586,14 @@ class DeleteDialog(QDialog):
         self.setMinimumWidth(460)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(f"Delete {count} selected track(s).", self))
-        self.index_only = QRadioButton("Remove from the library index only (undoable)", self)
+        self.index_only = QRadioButton("Remove from the library index only", self)
         self.index_only.setChecked(True)
         self.trash_files = QRadioButton("Remove from the index and move files to the Trash", self)
         layout.addWidget(self.index_only)
         layout.addWidget(self.trash_files)
         warning = QLabel(
-            "Moving files to the macOS Trash cannot be undone inside TrackStash.",
+            "Index-only removal leaves files on disk. Moving files to the macOS "
+            "Trash cannot be undone inside TrackStash.",
             self,
         )
         warning.setWordWrap(True)

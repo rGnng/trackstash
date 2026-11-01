@@ -223,12 +223,6 @@ class MainWindow(QMainWindow):
         self.auto_number_action = QAction("Auto-number Tracks…", self)
         self.auto_number_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
         self.auto_number_action.triggered.connect(self.auto_number_tracks)
-        self.undo_action = QAction("Undo", self)
-        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
-        self.undo_action.triggered.connect(self.undo)
-        self.redo_action = QAction("Redo", self)
-        self.redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
-        self.redo_action.triggered.connect(self.redo)
 
         self.settings_action = QAction("Settings…", self)
         self.settings_action.setShortcut(QKeySequence("Ctrl+,"))
@@ -258,15 +252,6 @@ class MainWindow(QMainWindow):
             refresh_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
         self.refresh_action.setIcon(refresh_icon)
 
-        undo_icon = QIcon.fromTheme("edit-undo")
-        if undo_icon.isNull():
-            undo_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack)
-        self.undo_action.setIcon(undo_icon)
-        redo_icon = QIcon.fromTheme("edit-redo")
-        if redo_icon.isNull():
-            redo_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward)
-        self.redo_action.setIcon(redo_icon)
-
         for action in (
             self.import_action,
             self.organize_action,
@@ -277,8 +262,6 @@ class MainWindow(QMainWindow):
             self.extract_cover_action,
             self.edit_action,
             self.auto_number_action,
-            self.undo_action,
-            self.redo_action,
             self.settings_action,
             self.tracks_view_action,
             self.albums_view_action,
@@ -383,19 +366,6 @@ class MainWindow(QMainWindow):
         library_row.addWidget(self.missing_artwork_button)
         library_row.addStretch(1)
 
-        self.undo_button = QToolButton(right)
-        self.undo_button.setDefaultAction(self.undo_action)
-        self.undo_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.undo_button.setToolTip("Undo (Ctrl+Z)")
-        self.undo_button.setFixedHeight(28)
-        library_row.addWidget(self.undo_button)
-        self.redo_button = QToolButton(right)
-        self.redo_button.setDefaultAction(self.redo_action)
-        self.redo_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.redo_button.setToolTip("Redo (Ctrl+Shift+Z)")
-        self.redo_button.setFixedHeight(28)
-        library_row.addWidget(self.redo_button)
-
         self.refresh_button = QToolButton(right)
         self.refresh_button.setDefaultAction(self.refresh_action)
         self.refresh_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -417,8 +387,7 @@ class MainWindow(QMainWindow):
         self.settings_button.setFixedSize(30, 28)
         self.settings_button.clicked.connect(self.settings_action.trigger)
         library_row.addWidget(self.settings_button)
-        for tool_button in (self.undo_button, self.redo_button, self.refresh_button):
-            tool_button.setIconSize(QSize(16, 16))
+        self.refresh_button.setIconSize(QSize(16, 16))
         right_layout.addLayout(library_row)
 
         self.tabs = QStackedWidget(right)
@@ -1019,7 +988,7 @@ class MainWindow(QMainWindow):
         return None
 
     # ------------------------------------------------------------------
-    # Import, organize, delete, undo
+    # Import, organize, and delete
 
     def import_files(self) -> None:
         library = self._require_library()
@@ -1050,30 +1019,6 @@ class MainWindow(QMainWindow):
         self.refresh_tracks()
         if result.errors:
             QMessageBox.warning(self, "Delete warnings", "\n".join(result.errors[:10]))
-
-    def undo(self) -> None:
-        result = self.service.undo_last()
-        if result is None:
-            QMessageBox.information(self, "Undo", "There is no operation to undo.")
-            return
-        self.refresh_libraries()
-        self.refresh_tracks()
-        message = f"Undid {result.kind}: {result.undone} changes."
-        if result.errors:
-            message += "\n" + "\n".join(result.errors[:10])
-            QMessageBox.warning(self, "Undo warnings", message)
-
-    def redo(self) -> None:
-        result = self.service.redo_last()
-        if result is None:
-            QMessageBox.information(self, "Redo", "There is no operation to redo.")
-            return
-        self.refresh_libraries()
-        self.refresh_tracks()
-        message = f"Redid {result.kind}: {result.undone} changes."
-        if result.errors:
-            message += "\n" + "\n".join(result.errors[:10])
-            QMessageBox.warning(self, "Redo warnings", message)
 
     # ------------------------------------------------------------------
     # Artwork and duplicates
