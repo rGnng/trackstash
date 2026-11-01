@@ -72,7 +72,6 @@ ALBUM_MIN_COVER = 158
 ALBUM_COLUMN_GAP = 22
 ALBUM_ROW_GAP = 26
 ALBUM_TEXT_HEIGHT = 34
-ALBUM_GRID_PADDING = 22
 
 
 class AlbumGridView(QListView):
@@ -417,7 +416,7 @@ class MainWindow(QMainWindow):
 
         albums_tab = QWidget(self.tabs)
         albums_layout = QVBoxLayout(albums_tab)
-        albums_layout.setContentsMargins(ALBUM_GRID_PADDING, 12, ALBUM_GRID_PADDING, 0)
+        albums_layout.setContentsMargins(0, 0, 0, 0)
         self.album_model = AlbumGridModel()
         self.album_view = AlbumGridView(albums_tab)
         self.album_view.setModel(self.album_model)
