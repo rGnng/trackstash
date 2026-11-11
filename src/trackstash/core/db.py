@@ -21,6 +21,7 @@ from trackstash.core.identity import (
     is_under,
     library_uuid,
     normalize_identifier,
+    resolve_disk_path,
     song_uuid,
     stable_uuid,
 )
@@ -701,6 +702,7 @@ class Database:
         new_library_id = library_uuid(new_path)
         if self.get_library(new_library_id) is not None:
             raise ValueError("The new library identity already exists")
+        cache: dict[str, dict[str, str]] = {}
         with self.transaction() as connection:
             rows = connection.execute(
                 "SELECT id, path FROM songs WHERE library_id = ?", (library_id,)
@@ -710,7 +712,7 @@ class Database:
                 if not is_under(old_song_path, old_path):
                     raise ValueError(f"Track is outside the old root: {old_song_path}")
                 suffix = old_song_path[len(old_path) :]
-                new_song_path = new_path + suffix
+                new_song_path = resolve_disk_path(new_path + suffix, cache)
                 connection.execute(
                     "UPDATE songs SET library_id = ?, path = ? WHERE id = ?",
                     (new_library_id, new_song_path, row["id"]),

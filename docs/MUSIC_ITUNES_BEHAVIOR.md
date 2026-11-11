@@ -222,6 +222,16 @@ iTunes 库把年份存为 4 位（`2021`），文件里常见完整日期（`202
 - **APFS**：按写入原样保存，查找时 NFC 和 NFD 都能找到。
 - **Music 对 NFD 输入**：保存的也是 NFD（目录和文件）。
 
+## 10.1 只改标签大小写时 Music 不改目录名【实测】
+
+- 曲目的专辑艺术家为 `Edge Artist`，目录也是 `Edge Artist/…`。
+- 在 Music 中把专辑艺术家改成 `EDGE ARTIST`。
+- 结果：标签值变为 `EDGE ARTIST`（也写入了文件），但目录仍是 `Edge Artist/…`，文件位置不变。
+
+原因：大小写不敏感的文件系统把两个名字视为同一个目录，Music 认为目标已存在，不做重命名。
+
+TrackStash 的处理：保持不改目录名（与 Music 一致），但写入数据库前解析并记录磁盘上的真实拼写（`resolve_disk_path`），避免数据库路径与文件系统不一致。
+
 ## 11. AppleScript 操作注意事项【实测】
 
 - `location of 引用` 在搜索结果上会报错（-1728）；必须用 `file track id N` 或 persistent ID 取得引用，再分两步读取（先 `set L to location of t`，再 `POSIX path of L`）。

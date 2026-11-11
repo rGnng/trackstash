@@ -22,6 +22,7 @@ from trackstash.core.identity import (
     canonical_path,
     normalize_identifier,
     relative_path,
+    resolve_disk_path,
     song_uuid,
 )
 from trackstash.core.metadata import (
@@ -446,6 +447,7 @@ class LibraryService:
                     file_written = True
                 if item.edits:
                     write_tags(destination, item.edits)
+                destination = Path(resolve_disk_path(str(destination)))
                 metadata = read_metadata(destination)
                 tracks = self.db.upsert_tracks([metadata], library)
                 if not tracks:
@@ -987,7 +989,40 @@ class LibraryService:
             if item.unchanged:
                 continue
             if item.collision:
-                errors.append(f"{item.old_path}: destination already exists")
+                # The destination exists. When it is the same file spelled with a
+                # different case or Unicode form, keep the file where it is and
+                # record the spelling the file system uses.
+                source = Path(item.old_path)
+                destination = Path(item.new_path)
+                same_file = (
+                    source.exists()
+                    and destination.exists()
+                    and os.path.samefile(source, destination)
+                )
+                if not same_file:
+                    errors.append(f"{item.old_path}: destination already exists")
+                    continue
+                real_path = resolve_disk_path(str(destination))
+                library = self.db.get_library(item.library_id)
+                rel = relative_path(real_path, library.path) if library is not None else None
+                if rel is None:
+                    errors.append(f"{item.old_path}: outside the library")
+                    continue
+                new_id = song_uuid(library.id_namespace, rel)
+                self.db.move_song(item.song_id, real_path, new_id)
+                self.db.add_operation_item(
+                    operation_id,
+                    song_id=new_id,
+                    path=real_path,
+                    prior={
+                        "old_path": item.old_path,
+                        "new_path": real_path,
+                        "old_id": item.old_id,
+                        "new_id": new_id,
+                        "library_id": item.library_id,
+                    },
+                    result={"track_id": new_id},
+                )
                 continue
             try:
                 source = Path(item.old_path)
@@ -995,16 +1030,22 @@ class LibraryService:
                 if not source.exists():
                     raise FileNotFoundError(item.old_path)
                 self._safe_move(source, destination)
-                track = self.db.move_song(item.song_id, item.new_path, item.new_id)
+                real_path = resolve_disk_path(str(destination))
+                library = self.db.get_library(item.library_id)
+                rel = relative_path(real_path, library.path) if library is not None else None
+                if rel is None:
+                    raise ValueError("destination is outside the library")
+                new_id = song_uuid(library.id_namespace, rel)
+                track = self.db.move_song(item.song_id, real_path, new_id)
                 self.db.add_operation_item(
                     operation_id,
-                    song_id=item.new_id,
-                    path=item.new_path,
+                    song_id=new_id,
+                    path=real_path,
                     prior={
                         "old_path": item.old_path,
-                        "new_path": item.new_path,
+                        "new_path": real_path,
                         "old_id": item.old_id,
-                        "new_id": item.new_id,
+                        "new_id": new_id,
                         "library_id": item.library_id,
                     },
                     result={"track_id": track.id},

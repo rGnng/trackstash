@@ -11,6 +11,7 @@ import hashlib
 import os
 import unicodedata
 import uuid
+from pathlib import Path
 
 __all__ = [
     "album_uuid",
@@ -23,6 +24,7 @@ __all__ = [
     "normalize_nfc",
     "normalize_relative_path",
     "relative_path",
+    "resolve_disk_path",
     "song_uuid",
     "stable_uuid",
     "swift_lower",
@@ -88,6 +90,41 @@ def album_uuid(artist_id: str, title: str) -> str:
 def library_uuid(path: str) -> str:
     """Return the Tracks-compatible library UUID for a canonical root path."""
     return stable_uuid("library|" + canonical_path(path))
+
+
+def _fold(value: str) -> str:
+    """Comparison key for a path component on a case-insensitive volume."""
+    return normalize_nfc(value).casefold()
+
+
+def resolve_disk_path(path: str | Path, cache: dict[str, dict[str, str]] | None = None) -> str:
+    """Return ``path`` spelled the way the file system stores it.
+
+    File systems on macOS are usually case-insensitive and may store a
+    different Unicode form, so the string TrackStash derived from tags can
+    differ from the real directory entry. The database must keep the real
+    spelling, otherwise a move to a case-sensitive system breaks lookups.
+    Missing components are returned unchanged.
+    """
+    target = str(path)
+    parts = Path(target).parts
+    if not parts:
+        return target
+    current = parts[0]
+    for part in parts[1:]:
+        listing = None if cache is None else cache.get(current)
+        if listing is None:
+            try:
+                listing = {_fold(name): name for name in os.listdir(current or "/")}
+            except OSError:
+                return target
+            if cache is not None:
+                cache[current] = listing
+        name = listing.get(_fold(part))
+        if name is None:
+            return target
+        current = os.path.join(current, name)
+    return current
 
 
 def canonical_path(path: str) -> str:
