@@ -21,6 +21,7 @@ htmlcov/
 # Application data
 data/
 logs/
+backups/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import copy
 import mimetypes
+import struct
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from io import BytesIO
@@ -44,7 +45,7 @@ from mutagen.id3 import (
     TXXX,
     USLT,
 )
-from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm, MP4Tags
+from mutagen.mp4 import MP4, Atoms, MP4Cover, MP4FreeForm, MP4Tags
 from mutagen.oggopus import OggOpus
 from mutagen.oggvorbis import OggVorbis
 
@@ -254,9 +255,14 @@ def supported_extensions() -> frozenset[str]:
 
 
 def _clean(value: Any) -> str:
+    """Return a tag value without trailing whitespace.
+
+    Leading whitespace is kept because Apple Music keeps it and turns it into
+    an underscore only where a path component starts.
+    """
     if value is None:
         return ""
-    return str(value).strip()
+    return str(value).rstrip()
 
 
 def _values(value: Any) -> list[str]:
@@ -503,6 +509,26 @@ def _read_id3(audio: Any) -> TagSet:
     return result
 
 
+def _mp4_compilation(audio: Any) -> bool:
+    """Return the MP4 compilation flag the way Apple Music reads it.
+
+    mutagen turns any non-zero integer into True, but Music only treats the
+    value 1 as a compilation. A stray text "0" (0x30) is therefore false.
+    """
+    try:
+        with open(audio.filename, "rb") as handle:
+            cpil = Atoms(handle).path(b"moov", b"udta", b"meta", b"ilst", b"cpil")[-1]
+            handle.seek(cpil.offset + 8)
+            size, name = struct.unpack(">I4s", handle.read(8))
+            if name != b"data":
+                return False
+            handle.seek(cpil.offset + 8 + 8 + 8)
+            payload = handle.read(size - 16)
+        return bool(payload) and payload[-1] == 1
+    except (OSError, KeyError, IndexError, struct.error, AttributeError):
+        return bool(audio.tags.get("cpil")) if audio.tags is not None else False
+
+
 def _read_mp4(audio: Any) -> TagSet:
     tags = audio.tags
     result = TagSet()
@@ -535,7 +561,7 @@ def _read_mp4(audio: Any) -> TagSet:
     result.comment = first("\xa9cmt")
     result.composer = first("\xa9wrt")
     result.lyrics = first("\xa9lyr")
-    result.compilation = bool(value("cpil"))
+    result.compilation = _mp4_compilation(audio)
     result.sort_title = first("sonm")
     result.sort_artist = first("soar")
     result.sort_album_artist = first("soaa")

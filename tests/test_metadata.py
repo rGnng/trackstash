@@ -168,3 +168,25 @@ def test_unknown_tags_survive_known_edits(audio_factory: Path) -> None:
     write_tags(mp3_path, {"title": "Known Edit"})
     reread = read_metadata(mp3_path)
     assert reread.raw_tags.get("TXXX:CustomField") == ["keep me"]
+
+
+def test_mp4_compilation_uses_only_value_one(tmp_path: Path, audio_factory: Path) -> None:
+    import shutil
+
+    from mutagen.mp4 import Atoms
+
+    from trackstash.core.metadata import write_tags
+
+    target = tmp_path / "compilation.m4a"
+    shutil.copy2(audio_factory / "sample.m4a", target)
+    write_tags(target, {"compilation": True})
+    assert read_metadata(target).tags.compilation is True
+
+    with open(target, "r+b") as handle:
+        cpil = Atoms(handle).path(b"moov", b"udta", b"meta", b"ilst", b"cpil")[-1]
+        handle.seek(cpil.offset + 8 + 8 + 8)
+        payload_end = cpil.offset + cpil.length
+        handle.seek(payload_end - 1)
+        handle.write(b"0")
+
+    assert read_metadata(target).tags.compilation is False

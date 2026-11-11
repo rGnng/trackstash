@@ -74,6 +74,7 @@ _TEMPLATE_HELP_ROWS: tuple[tuple[str, str], ...] = (
     ("{title}", "Song title"),
     ("{artist}", "Primary artist"),
     ("{album_artist}", "Album artist, falling back to the primary artist"),
+    ("{artist_folder}", "Compilations for compilations, otherwise the album artist"),
     ("{album}", "Album title"),
     ("{year}", "Release year"),
     ("{date}", "Alias of {year}"),
@@ -87,7 +88,8 @@ _TEMPLATE_HELP_ROWS: tuple[tuple[str, str], ...] = (
     ("{disc}", "Disc number"),
     ("{disc_total}", "Total discs"),
     ("{disc_dir}", "Disc 1/ for multi-disc albums; empty otherwise"),
-    ("{disc_prefix}", "1- when a disc number is present; empty otherwise"),
+    ("{disc_prefix}", "1- for a disc number other than a single-disc 1/1; empty otherwise"),
+    ("{track_prefix}", "01 with the track number, empty when there is none"),
     ("{format}", "Lowercase source format, such as flac or mp3"),
     ("{bitrate}", "Bitrate in kbps"),
     ("{ext}", "File extension without the dot"),
@@ -968,8 +970,9 @@ class SettingsDialog(QDialog):
         form.addRow("Organization template", template_host)
         template_hint = QLabel(
             "Used by Import and Organize. {disc_prefix} adds the disc number "
-            "before the track number whenever a disc tag is present; {disc_dir} "
-            "adds a Disc N/ folder for multi-disc albums.",
+            "before the track number unless the album is a single disc; {track_prefix} "
+            "adds the track number only when there is one; {disc_dir} adds a Disc N/ "
+            "folder for multi-disc albums.",
             general_tab,
         )
         template_hint.setWordWrap(True)

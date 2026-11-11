@@ -325,7 +325,7 @@ class LibraryService:
                     )
                     continue
             else:
-                rel = render_template(template, tags, metadata, extension=source.suffix.lower())
+                rel = render_template(template, tags, metadata, extension=source.suffix)
                 destination = Path(library.path) / rel
                 duplicate_id = known_hashes.get(content_hash(source)) if known_hashes else None
                 if duplicate_id is not None and duplicate_policy == "skip":

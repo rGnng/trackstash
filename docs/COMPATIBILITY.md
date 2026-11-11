@@ -150,7 +150,7 @@ Ported from Tracks/WebTracks:
 TrackStash-specific behavior:
 
 - Imports copy by default and may move on request. Files are organized by tags
-  using the default template `{album_artist}/{album}/{disc_prefix}{track:02} {title}`. `{disc_prefix}` inserts the disc number before the track number whenever a disc tag is present, using the disc number as written (`1-`, `10-`, or `100-`) and preventing filename collisions without creating per-disc folders.
+  using the default template `{artist_folder}/{album}/{disc_prefix}{track_prefix}{title}`. `{artist_folder}` is `Compilations` for compilations and the album artist otherwise. `{disc_prefix}` inserts `N-` when the disc number is above zero and the disc total is not 1. `{track_prefix}` inserts `NN ` only when a track number is present. These rules match Apple Music's observed behavior (`docs/ITUNES_NAMING_ANALYSIS.md`).
 - Only tags edited in the import wizard are written back to the imported file.
 - Tag writes use mutagen and preserve unknown tags where the container supports
   them.
