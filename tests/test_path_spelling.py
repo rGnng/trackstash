@@ -52,9 +52,7 @@ def test_resolve_disk_path_keeps_unicode_form_used_on_disk(tmp_path: Path) -> No
 
 
 @requires_case_insensitive
-def test_import_records_the_existing_folder_spelling(
-    tmp_path: Path, audio_factory: Path
-) -> None:
+def test_import_records_the_existing_folder_spelling(tmp_path: Path, audio_factory: Path) -> None:
     root = tmp_path / "Library"
     existing = root / "Test Artist" / "Test Album"
     existing.mkdir(parents=True)
