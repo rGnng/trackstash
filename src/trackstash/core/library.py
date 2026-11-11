@@ -1004,7 +1004,10 @@ class LibraryService:
                     continue
                 real_path = resolve_disk_path(str(destination))
                 library = self.db.get_library(item.library_id)
-                rel = relative_path(real_path, library.path) if library is not None else None
+                if library is None:
+                    errors.append(f"{item.old_path}: library not found")
+                    continue
+                rel = relative_path(real_path, library.path)
                 if rel is None:
                     errors.append(f"{item.old_path}: outside the library")
                     continue
@@ -1032,7 +1035,9 @@ class LibraryService:
                 self._safe_move(source, destination)
                 real_path = resolve_disk_path(str(destination))
                 library = self.db.get_library(item.library_id)
-                rel = relative_path(real_path, library.path) if library is not None else None
+                if library is None:
+                    raise ValueError("library not found")
+                rel = relative_path(real_path, library.path)
                 if rel is None:
                     raise ValueError("destination is outside the library")
                 new_id = song_uuid(library.id_namespace, rel)
